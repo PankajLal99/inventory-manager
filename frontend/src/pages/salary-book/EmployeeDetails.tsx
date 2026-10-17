@@ -3,9 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { apiError, formatINR, formatDate, statusLabel, toTimeInput } from './utils';
+import { apiError, formatINR, formatDate, periodContaining, statusLabel, toTimeInput } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
 import ConfirmDialog from './components/ConfirmDialog';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
@@ -126,7 +126,7 @@ export default function EmployeeDetails() {
             label="Salary cycle day"
             value={
               data.salary_cycle_start_day && data.salary_cycle_start_day > 1
-                ? `${data.salary_cycle_start_day}th → next ${data.salary_cycle_start_day}th`
+                ? `Payday on the ${data.salary_cycle_start_day}th (next cycle starts the day after)`
                 : '1st (calendar month)'
             }
           />
@@ -142,7 +142,9 @@ export default function EmployeeDetails() {
         </div>
       )}
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
-      {tab === 'attendance' && <AttendanceHistory employeeId={empId} />}
+      {tab === 'attendance' && (
+        <AttendanceHistory employeeId={empId} cycleDay={data.salary_cycle_start_day} />
+      )}
       {tab === 'leaves' && <LeaveHistory employeeId={empId} />}
       {tab === 'advances' && (
         <AdvanceHistory employeeId={empId} employeeName={data.name} />
@@ -183,36 +185,46 @@ function EmployeeRules({ employeeId }: { employeeId: number }) {
   );
 }
 
-function AttendanceHistory({ employeeId }: { employeeId: number }) {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const { data, isLoading } = useQuery({
+function AttendanceHistory({
+  employeeId,
+  cycleDay,
+}: {
+  employeeId: number;
+  cycleDay?: number;
+}) {
+  const open = useMemo(() => periodContaining(cycleDay), [cycleDay]);
+  const [year, setYear] = useState(open.year);
+  const [month, setMonth] = useState(open.month);
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],
     queryFn: async () =>
       (await salaryBookApi.calendar({ year, month, employee: employeeId })).data as CalendarResponse,
   });
   if (isLoading) return <LoadingState message="Loading attendance..." />;
+  // Avoid rendering a prior month's strip under the newly selected year/month.
+  if (isFetching && data && (data.year !== year || data.month !== month)) {
+    return <LoadingState message="Loading attendance..." />;
+  }
   const emp = data?.employees[0];
-  if (!emp) return <p className="text-sm text-gray-500">No attendance records found.</p>;
+  if (!emp || !data) return <p className="text-sm text-gray-500">No attendance records found.</p>;
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <MonthNav year={year} month={month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
+        <MonthNav year={data.year} month={data.month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
         <Link
-          to={`/salary-book/calendar?employee=${employeeId}&year=${year}&month=${month}`}
+          to={`/salary-book/calendar?employee=${employeeId}&year=${data.year}&month=${data.month}`}
           className="text-sm text-emerald-800 font-medium"
         >
           Open full calendar
         </Link>
       </div>
-      {data && <KpiStrip kpis={data.kpis} compact />}
+      <KpiStrip kpis={data.kpis} compact />
       <CalendarLegend />
       <EmployeeMonthGrid
-        year={year}
-        month={month}
-        daysInMonth={data?.days_in_month || 31}
-        today={data?.today || ''}
+        year={data.year}
+        month={data.month}
+        daysInMonth={data.days_in_month}
+        today={data.today}
         employee={emp}
       />
     </div>

@@ -1467,27 +1467,40 @@ def _calendar_day_cell(marked, emp, settings_obj):
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def attendance_calendar(request):
     today = timezone.localdate()
-    try:
-        year = int(request.query_params.get('year', today.year))
-        month = int(request.query_params.get('month', today.month))
-    except (TypeError, ValueError):
-        year, month = today.year, today.month
+    employee_id = request.query_params.get('employee')
+    year_param = request.query_params.get('year')
+    month_param = request.query_params.get('month')
+
+    # Single-employee view with no month selected → open salary period containing today
+    # so a new cycle starts with cleared Taken / Salary Generated.
+    if employee_id and (year_param is None or month_param is None):
+        emp_for_default = Employee.objects.filter(pk=employee_id).first()
+        if emp_for_default:
+            year, month = period_containing(emp_for_default, today)
+        else:
+            year, month = today.year, today.month
+    else:
+        try:
+            year = int(year_param if year_param is not None else today.year)
+            month = int(month_param if month_param is not None else today.month)
+        except (TypeError, ValueError):
+            year, month = today.year, today.month
+
     try:
         calendar_start, calendar_end = month_range(year, month)
     except (calendar.IllegalMonthError, ValueError):
         return _err('Invalid month.')
 
     days_in_month = calendar.monthrange(year, month)[1]
-    employee_id = request.query_params.get('employee')
     if employee_id:
         employees = list(Employee.objects.filter(pk=employee_id))
         if not employees:
             return _err('Employee not found.', status.HTTP_404_NOT_FOUND)
         view = 'employee'
-        # Single-employee view follows their salary cycle (e.g. 14→ next 14).
+        # Single-employee view follows their salary cycle (e.g. 14 Oct → 13 Nov).
         period_start, period_end = cycle_range(employees[0], year, month)
         period_end_marker = cycle_end_marker(employees[0], year, month)
-        # Calendar UI includes the end marker day (next cycle date).
+        # Calendar UI shows the full paid window through payday.
         range_start, range_end = period_start, period_end_marker
     else:
         employees = list(Employee.objects.filter(status=Employee.STATUS_ACTIVE).order_by('name'))
@@ -1495,7 +1508,7 @@ def attendance_calendar(request):
         period_start, period_end = calendar_start, calendar_end
         period_end_marker = calendar_end
         range_start, range_end = calendar_start, calendar_end
-        # Pull enough days so each employee's 14→14 cycle strip can render.
+        # Pull enough days so each employee's cycle strip can render.
         for emp in employees:
             s, _ = cycle_range(emp, year, month)
             em = cycle_end_marker(emp, year, month)

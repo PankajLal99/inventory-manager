@@ -200,7 +200,7 @@ export default function EmployeeForm() {
           onChange={(e) => set('salary_cycle_start_day', e.target.value)}
         />
         <p className="mt-1 text-xs text-gray-500">
-          Defaults from start date (e.g. joined on 5th → 5th → next 5th). Use 1 for a normal calendar
+          Defaults from start date (payday on that day-of-month; next cycle starts the day after). Use 1 for a normal calendar
           month.
         </p>
       </div>

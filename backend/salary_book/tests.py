@@ -767,20 +767,25 @@ class SalaryRuleTests(SalaryBookMixin, APITestCase):
         self.assertEqual(calc['net_salary'], Decimal('0.00'))
         self.assertEqual(calc['breakdown']['pre_join_days'], '30')
 
-    def test_salary_cycle_day_9_uses_previous_9_to_this_9(self):
-        """Cycle day 9 for May period → 9 Apr … 8 May; calendar-day divisor = 30."""
+    def test_salary_cycle_day_9_uses_day_after_previous_payday_to_this_payday(self):
+        """Cycle day 9 for May period → 10 Apr … 9 May; calendar-day divisor = 30."""
         from backend.salary_book.services.salary_calculator import cycle_range, period_containing
 
         self.emp.salary_cycle_start_day = 9
         self.emp.salary_calculation_method = Employee.METHOD_CALENDAR
         self.emp.save(update_fields=['salary_cycle_start_day', 'salary_calculation_method'])
         start, end = cycle_range(self.emp, 2026, 5)
-        self.assertEqual(start, date(2026, 4, 9))
-        self.assertEqual(end, date(2026, 5, 8))
+        self.assertEqual(start, date(2026, 4, 10))
+        self.assertEqual(end, date(2026, 5, 9))
         self.assertEqual(period_containing(self.emp, date(2026, 4, 15)), (2026, 5))
-        self.assertEqual(period_containing(self.emp, date(2026, 5, 9)), (2026, 6))
+        # Payday still belongs to the ending period; next cycle starts the day after.
+        self.assertEqual(period_containing(self.emp, date(2026, 5, 9)), (2026, 5))
+        self.assertEqual(period_containing(self.emp, date(2026, 5, 10)), (2026, 6))
+        june_start, june_end = cycle_range(self.emp, 2026, 6)
+        self.assertEqual(june_start, date(2026, 5, 10))
+        self.assertEqual(june_end, date(2026, 6, 9))
 
-        # Present every day in the Apr9–May8 window
+        # Present every day in the Apr10–May9 window
         rows = []
         cursor = start
         while cursor <= end:
@@ -800,10 +805,41 @@ class SalaryRuleTests(SalaryBookMixin, APITestCase):
         Attendance.objects.bulk_create(rows)
         calc = calculate_employee_month(self.emp, 2026, 5, today=date(2026, 5, 10))
         self.assertEqual(calc['divisor_days'], 30)
-        self.assertEqual(calc['breakdown']['period_start'], '2026-04-09')
+        self.assertEqual(calc['breakdown']['period_start'], '2026-04-10')
         self.assertEqual(calc['breakdown']['period_end_marker'], '2026-05-09')
         self.assertEqual(calc['leave_deduction'], Decimal('0.00'))
         self.assertEqual(calc['net_salary'], Decimal('15000.00'))
+
+    def test_new_cycle_clears_taken_and_salary_from_prior_period(self):
+        """Advances in the closed cycle must not appear in the next cycle's Taken."""
+        from backend.salary_book.services.salary_calculator import cycle_range, period_containing
+
+        self.emp.salary_cycle_start_day = 13
+        self.emp.salary_calculation_method = Employee.METHOD_CALENDAR
+        self.emp.date_of_joining = date(2026, 9, 1)
+        self.emp.save(
+            update_fields=['salary_cycle_start_day', 'salary_calculation_method', 'date_of_joining']
+        )
+        nov_start, nov_end = cycle_range(self.emp, 2026, 11)
+        self.assertEqual(nov_start, date(2026, 10, 14))
+        self.assertEqual(nov_end, date(2026, 11, 13))
+        self.assertEqual(period_containing(self.emp, date(2026, 11, 14)), (2026, 12))
+
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 10, 20),
+            amount=Decimal('2000.00'),
+            reason='Old cycle',
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        old = calculate_employee_month(self.emp, 2026, 11, today=date(2026, 11, 13))
+        self.assertEqual(old['total_advances'], Decimal('2000.00'))
+
+        fresh = calculate_employee_month(self.emp, 2026, 12, today=date(2026, 11, 14))
+        self.assertEqual(fresh['total_advances'], Decimal('0.00'))
+        self.assertEqual(fresh['breakdown']['period_start'], '2026-11-14')
+        self.assertEqual(fresh['breakdown']['period_end_marker'], '2026-12-13')
 
 
 class LeaveAdvanceTests(SalaryBookMixin, APITestCase):

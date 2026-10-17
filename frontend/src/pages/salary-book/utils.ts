@@ -92,6 +92,25 @@ export function cyclePeriodLabel(
   return `${start} → ${end}${day}`;
 }
 
+/**
+ * Salary period key (year, month of payday) containing `forDate`.
+ * Matches backend period_containing: payday belongs to the ending period;
+ * the next cycle starts the following calendar day.
+ */
+export function periodContaining(
+  cycleDay: number | null | undefined,
+  forDate: Date = new Date(),
+): { year: number; month: number } {
+  const day = Math.min(28, Math.max(1, Number(cycleDay) || 1));
+  const year = forDate.getFullYear();
+  const month = forDate.getMonth() + 1;
+  const dom = forDate.getDate();
+  if (day <= 1) return { year, month };
+  if (dom <= day) return { year, month };
+  if (month === 12) return { year: year + 1, month: 1 };
+  return { year, month: month + 1 };
+}
+
 export function todayISO() {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');

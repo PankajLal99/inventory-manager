@@ -687,7 +687,8 @@ function formatCycleBound(
 }
 
 /**
- * Build 14 → next 14 (inclusive) for cycleDay > 1; else calendar 1…last.
+ * Build cycle strip for cycleDay > 1: day after previous payday → this payday.
+ * Example day 13, November → 14 Oct … 13 Nov. Else calendar 1…last.
  */
 function buildCycleWindowList(
   employee: CalendarEmployee,
@@ -695,6 +696,8 @@ function buildCycleWindowList(
   month: number,
   daysInMonth: number,
   cycleDay: number,
+  rangeStartIso?: string | null,
+  rangeEndIso?: string | null,
 ): CycleDayItem[] {
   if (cycleDay <= 1) {
     return Array.from({ length: daysInMonth }, (_, i) => {
@@ -710,13 +713,21 @@ function buildCycleWindowList(
     });
   }
 
-  // Period ending this month: previous month's cycleDay → this month's cycleDay
-  const prev = month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 };
-  const startD = Math.min(cycleDay, new Date(prev.y, prev.m, 0).getDate());
-  const endD = Math.min(cycleDay, daysInMonth);
-  const endIso = isoFromParts(year, month, endD);
+  let startIso = rangeStartIso || undefined;
+  let endIso = rangeEndIso || undefined;
+  if (!startIso || !endIso) {
+    // Period ending this month: day after previous payday → this payday
+    const prev = month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 };
+    const prevPayday = Math.min(cycleDay, new Date(prev.y, prev.m, 0).getDate());
+    const startParts = addCalendarDays(prev.y, prev.m, prevPayday, 1);
+    const endD = Math.min(cycleDay, daysInMonth);
+    startIso = isoFromParts(startParts.y, startParts.m, startParts.d);
+    endIso = isoFromParts(year, month, endD);
+  }
+
   const list: CycleDayItem[] = [];
-  let cur = { y: prev.y, m: prev.m, d: startD };
+  const [sy, sm, sd] = startIso.split('-').map(Number);
+  let cur = { y: sy, m: sm, d: sd };
   while (true) {
     const iso = isoFromParts(cur.y, cur.m, cur.d);
     const cell =
@@ -725,14 +736,16 @@ function buildCycleWindowList(
     list.push({ iso, y: cur.y, m: cur.m, d: cur.d, cell });
     if (iso >= endIso) break;
     cur = addCalendarDays(cur.y, cur.m, cur.d, 1);
+    // Safety: never walk more than ~62 days
+    if (list.length > 62) break;
   }
   return list;
 }
 
 /**
- * Days to show for one employee:
- * Cycle day 14 → strip is 14th → next month's 14th (not 14…31 of same month).
- * Prefer API cycle_days when it already spans that window; else build locally.
+ * Days to show for one employee.
+ * Prefer API cycle_days when bounds match period_start / period_end_marker;
+ * otherwise rebuild so month changes still populate prior-cycle attendance.
  */
 function employeeCycleDayList(
   employee: CalendarEmployee,
@@ -742,18 +755,40 @@ function employeeCycleDayList(
 ): CycleDayItem[] {
   const cycleDay = employee.salary_cycle_start_day || 1;
   const cycle = employee.cycle_days;
-  let list: CycleDayItem[];
+  const periodStart = employee.period_start || null;
+  const periodEndMarker = employee.period_end_marker || null;
 
-  if (cycle && Object.keys(cycle).length > 0) {
-    list = Object.keys(cycle)
+  const boundsMatchRequest = (() => {
+    if (!periodEndMarker || cycleDay <= 1) return true;
+    const [ey, em] = periodEndMarker.split('-').map(Number);
+    return ey === year && em === month;
+  })();
+
+  if (cycle && Object.keys(cycle).length > 0 && boundsMatchRequest) {
+    const list = Object.keys(cycle)
       .sort()
       .map((iso) => {
         const [y, m, d] = iso.split('-').map(Number);
         return { iso, y, m, d, cell: cycle[iso] };
       });
 
-    // Guard: rebuild when API strip is wrong length (e.g. only end-marker day,
-    // or calendar month 1…31 instead of 14→next 14).
+    if (cycleDay > 1 && periodStart && periodEndMarker) {
+      const first = list[0]?.iso;
+      const last = list[list.length - 1]?.iso;
+      const matchesBounds = first === periodStart && last === periodEndMarker;
+      const tooShort = list.length < 27;
+      if (matchesBounds && !tooShort) return list;
+      return buildCycleWindowList(
+        employee,
+        year,
+        month,
+        daysInMonth,
+        cycleDay,
+        periodStart,
+        periodEndMarker,
+      );
+    }
+
     if (cycleDay > 1) {
       const last = list[list.length - 1];
       const expectedEndD = Math.min(cycleDay, daysInMonth);
@@ -762,19 +797,23 @@ function employeeCycleDayList(
       const endsOnCycleMarker =
         last && last.y === year && last.m === month && last.d === expectedEndD;
       const hasMarker = list.some((item) => item.cell?.is_cycle_end_marker);
-      const tooShort = list.length < 28;
+      const tooShort = list.length < 27;
       if (tooShort || (endsOnMonthLast && !endsOnCycleMarker && !hasMarker)) {
-        list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
+        return buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
       }
     }
-  } else {
-    list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
+    return list;
   }
 
-  // Always keep the full cycle window (e.g. 14 Sep → 14 Oct).
-  // Do NOT slice away BEFORE_JOINING — that collapsed Ajay/Ankush to one day
-  // when join fell on the cycle end marker. Pre-join days stay muted in-strip.
-  return list;
+  return buildCycleWindowList(
+    employee,
+    year,
+    month,
+    daysInMonth,
+    cycleDay,
+    boundsMatchRequest ? periodStart : null,
+    boundsMatchRequest ? periodEndMarker : null,
+  );
 }
 
 export function EmployeeMonthGrid({
@@ -819,9 +858,9 @@ export function EmployeeMonthGrid({
       {cycleDay > 1 && dayList.length > 0 ? (
         <p className="text-xs text-emerald-800 font-medium px-0.5">
           Salary cycle day {cycleDay}: grid shows{' '}
-          {employee.period_start || dayList[0].iso} →{' '}
-          {employee.period_end_marker || dayList[dayList.length - 1].iso} (through next{' '}
-          {cycleDay}th, not month-end)
+          {formatCycleBound(employee.period_start, dayList[0])} →{' '}
+          {formatCycleBound(employee.period_end_marker, dayList[dayList.length - 1])}{' '}
+          (payday on the {cycleDay}th; next cycle starts the day after)
         </p>
       ) : null}
 

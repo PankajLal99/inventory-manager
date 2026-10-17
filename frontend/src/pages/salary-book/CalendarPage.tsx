@@ -22,18 +22,38 @@ import ManualAttendanceDialog, {
 } from './components/ManualAttendanceDialog';
 import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
 import TakenHistoryByDate from './components/TakenHistoryByDate';
-import { apiError, cyclePeriodLabel, toTimeInput } from './utils';
+import { apiError, cyclePeriodLabel, periodContaining, toTimeInput } from './utils';
 
 export default function CalendarPage() {
   const [params, setParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const now = new Date();
-  const year = Number(params.get('year')) || now.getFullYear();
-  const month = Number(params.get('month')) || now.getMonth() + 1;
+  const hasExplicitMonth = params.has('year') || params.has('month');
   const employeeId = params.get('employee') ? Number(params.get('employee')) : undefined;
   const [search, setSearch] = useState('');
   const [manualTarget, setManualTarget] = useState<ManualAttendanceTarget | null>(null);
   const [amountTarget, setAmountTarget] = useState<AddAmountTarget | null>(null);
+  const today = useMemo(() => new Date(), []);
+
+  const employeesQuery = useQuery({
+    queryKey: ['salary-book', 'employees', 'ACTIVE'],
+    queryFn: async () =>
+      (await salaryBookApi.employees.list({ status: 'ACTIVE', page_size: 100 })).data as Paginated<Employee>,
+  });
+
+  // Employee calendar without year/month → open salary period (new cycle = cleared Taken / salary).
+  const openPeriod = useMemo(() => {
+    if (!employeeId || hasExplicitMonth) return null;
+    const emp = employeesQuery.data?.results.find((e) => e.id === employeeId);
+    if (!emp) return null;
+    return periodContaining(emp.salary_cycle_start_day, today);
+  }, [employeeId, hasExplicitMonth, employeesQuery.data, today]);
+
+  const year = hasExplicitMonth
+    ? Number(params.get('year')) || today.getFullYear()
+    : openPeriod?.year ?? (!employeeId ? today.getFullYear() : undefined);
+  const month = hasExplicitMonth
+    ? Number(params.get('month')) || today.getMonth() + 1
+    : openPeriod?.month ?? (!employeeId ? today.getMonth() + 1 : undefined);
 
   const setMonth = (nextYear: number, nextMonth: number) => {
     const next = new URLSearchParams(params);
@@ -44,16 +64,16 @@ export default function CalendarPage() {
 
   const setEmployee = (id: string) => {
     const next = new URLSearchParams(params);
-    if (id) next.set('employee', id);
-    else next.delete('employee');
+    if (id) {
+      next.set('employee', id);
+      // Re-resolve open cycle for the selected employee.
+      next.delete('year');
+      next.delete('month');
+    } else {
+      next.delete('employee');
+    }
     setParams(next);
   };
-
-  const employeesQuery = useQuery({
-    queryKey: ['salary-book', 'employees', 'ACTIVE'],
-    queryFn: async () =>
-      (await salaryBookApi.employees.list({ status: 'ACTIVE', page_size: 100 })).data as Paginated<Employee>,
-  });
 
   const settingsQuery = useQuery({
     queryKey: ['salary-book', 'settings'],
@@ -62,6 +82,7 @@ export default function CalendarPage() {
 
   const calendarQuery = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],
+    enabled: year != null && month != null,
     queryFn: async () =>
       (await salaryBookApi.calendar({ year, month, employee: employeeId })).data as CalendarResponse,
   });
@@ -85,7 +106,8 @@ export default function CalendarPage() {
 
     // In the current month, unmarked-for-today stay on top; marked sink below.
     const todayIso = data?.today;
-    if (!todayIso || !data || data.year !== year || data.month !== month) {
+    if (!todayIso || !data) return filtered;
+    if (year != null && month != null && (data.year !== year || data.month !== month)) {
       return filtered;
     }
     const [ty, tm] = todayIso.split('-').map(Number);
@@ -212,7 +234,9 @@ export default function CalendarPage() {
     setAmountTarget({ employeeId: emp.id, employeeName: emp.name });
   };
 
-  if (calendarQuery.isLoading) return <LoadingState message="Loading calendar..." />;
+  if (year == null || month == null || calendarQuery.isLoading) {
+    return <LoadingState message="Loading calendar..." />;
+  }
   if (calendarQuery.isError || !calendarQuery.data) {
     return <ErrorState message="Unable to load calendar." onRetry={() => calendarQuery.refetch()} />;
   }
@@ -271,7 +295,7 @@ export default function CalendarPage() {
               void employeesQuery.refetch();
             }}
           />
-          <MonthNav year={year} month={month} onChange={setMonth} />
+          <MonthNav year={data.year} month={data.month} onChange={setMonth} />
         </div>
       </div>
 

@@ -171,7 +171,7 @@ class Employee(models.Model):
     address = models.TextField(blank=True)
     blood_group = models.CharField(max_length=8, blank=True, choices=BLOOD_GROUP_CHOICES)
     date_of_joining = models.DateField()
-    # Day of month the salary cycle starts/ends (e.g. 9 → 9th to next 9th). 1 = calendar month.
+    # Payday day-of-month (e.g. 13 → day after previous 13th through this 13th). 1 = calendar month.
     salary_cycle_start_day = models.PositiveSmallIntegerField(
         default=1,
         validators=[MinValueValidator(1)],

@@ -60,22 +60,24 @@ def cycle_range(employee: Employee, year: int, month: int):
     """
     Inclusive start/end for the salary period keyed by (year, month).
 
-    (year, month) is the month of the period end marker (payday day).
-    Example day=9, period Feb 2026 → 9 Jan … 8 Feb (ends on the 9th marker).
+    (year, month) is the month of the period end day (payday).
+    Example day=13, period Nov 2026 → 14 Oct … 13 Nov (inclusive).
+    After payday, the next grid starts the following day: 14 Nov … 13 Dec.
     Day=1 keeps a normal calendar month (1st … last day).
     """
     day = cycle_day_for(employee)
     if day == 1:
         return month_range(year, month)
-    end_marker = _safe_day(year, month, day)
+    end = _safe_day(year, month, day)
     prev_y, prev_m = _shift_month(year, month, -1)
-    start = _safe_day(prev_y, prev_m, day)
-    inclusive_end = end_marker - timedelta(days=1)
-    return start, inclusive_end
+    prev_marker = _safe_day(prev_y, prev_m, day)
+    # Previous period owns prev_marker (payday). This period starts the next day.
+    start = prev_marker + timedelta(days=1)
+    return start, end
 
 
 def cycle_end_marker(employee: Employee, year: int, month: int) -> date:
-    """The 'ends on this date' marker (e.g. 9 Feb for a 9→9 cycle)."""
+    """The inclusive period end / payday (e.g. 13 Nov for a 13-day cycle)."""
     day = cycle_day_for(employee)
     if day == 1:
         _, end = month_range(year, month)
@@ -88,7 +90,9 @@ def period_containing(employee: Employee, for_date: date):
     day = cycle_day_for(employee)
     if day == 1:
         return for_date.year, for_date.month
-    if for_date.day < day:
+    # Payday still belongs to the period that ends that day; the next cycle
+    # begins the following calendar day (clears Taken / Salary Generated).
+    if for_date.day <= day:
         return for_date.year, for_date.month
     next_y, next_m = _shift_month(for_date.year, for_date.month, 1)
     return next_y, next_m
@@ -296,8 +300,8 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
         'Half day is capped at half of daily salary.',
         'Salary calculation starts from the employee date of joining; earlier days are unpaid.',
-        f'Salary cycle starts on day {cycle_day} and ends on day {cycle_day} '
-        f'({start.isoformat()} → {end_marker.isoformat()}).',
+        f'Salary cycle payday is day {cycle_day} '
+        f'({start.isoformat()} → {end_marker.isoformat()}); the next cycle starts the day after.',
         'Active salary advances in this cycle reduce net payable.',
         'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
     ]
