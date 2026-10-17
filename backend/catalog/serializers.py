@@ -289,8 +289,7 @@ class ProductSerializer(serializers.ModelSerializer):
         for barcode in barcodes:
             supplier_name = "Unknown"
             if barcode.purchase and barcode.purchase.supplier:
-                # Use supplier code if available, otherwise name
-                supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                supplier_name = barcode.purchase.supplier.name or barcode.purchase.supplier.code
             
             supplier_counts[supplier_name] = supplier_counts.get(supplier_name, 0) + 1
             
@@ -312,7 +311,7 @@ class ProductSerializer(serializers.ModelSerializer):
         for barcode in barcodes:
             supplier_name = "Unknown"
             if barcode.purchase and barcode.purchase.supplier:
-                supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                supplier_name = barcode.purchase.supplier.name or barcode.purchase.supplier.code
             
             # Use selling_price if available and > 0, otherwise purchase_price
             price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
@@ -438,7 +437,7 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
             continue
         supplier_name = "Unknown"
         if item.purchase and item.purchase.supplier:
-            supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
+            supplier_name = item.purchase.supplier.name or item.purchase.supplier.code
         price_val = float(item.unit_price) if item.unit_price else 0
         price_str = f"₹{price_val:g}" if price_val else "—"
         selling_price_val = float(item.selling_price) if item.selling_price else 0
@@ -805,7 +804,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
                 if barcode.purchase and barcode.purchase.supplier:
-                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                    supplier_name = barcode.purchase.supplier.name or barcode.purchase.supplier.code
                 supplier_counts[supplier_name] = supplier_counts.get(supplier_name, 0) + 1
 
         if not supplier_counts:
@@ -829,7 +828,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
                 if barcode.purchase and barcode.purchase.supplier:
-                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                    supplier_name = barcode.purchase.supplier.name or barcode.purchase.supplier.code
                 
                 # Use selling_price if available and > 0, otherwise purchase_price
                 price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
