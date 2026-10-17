@@ -7,7 +7,7 @@ export interface Employee {
   address: string;
   blood_group: string;
   date_of_joining: string;
-  /** Payday day-of-month (1–28). Period runs from the day after the previous payday through this payday. */
+  /** Joining day-of-month (1–28). Calendar strip is previous Nth → this Nth; next cycle starts the day after. */
   salary_cycle_start_day: number;
   designation: string;
   department: string;

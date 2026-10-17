@@ -58,11 +58,11 @@ def _shift_month(year: int, month: int, delta: int):
 
 def cycle_range(employee: Employee, year: int, month: int):
     """
-    Inclusive start/end for the salary period keyed by (year, month).
+    Inclusive calendar/salary window keyed by (year, month) of the payday.
 
-    (year, month) is the month of the period end day (payday).
-    Example day=13, period Nov 2026 → 14 Oct … 13 Nov (inclusive).
-    After payday, the next grid starts the following day: 14 Nov … 13 Dec.
+    Anchored on the employee's joining day-of-month (salary_cycle_start_day),
+    not on a calendar-month grid. Example day=13, October 2026:
+      13 Sep → 13 Oct  (31 days — full strip on the calendar).
     Day=1 keeps a normal calendar month (1st … last day).
     """
     day = cycle_day_for(employee)
@@ -70,14 +70,12 @@ def cycle_range(employee: Employee, year: int, month: int):
         return month_range(year, month)
     end = _safe_day(year, month, day)
     prev_y, prev_m = _shift_month(year, month, -1)
-    prev_marker = _safe_day(prev_y, prev_m, day)
-    # Previous period owns prev_marker (payday). This period starts the next day.
-    start = prev_marker + timedelta(days=1)
+    start = _safe_day(prev_y, prev_m, day)
     return start, end
 
 
 def cycle_end_marker(employee: Employee, year: int, month: int) -> date:
-    """The inclusive period end / payday (e.g. 13 Nov for a 13-day cycle)."""
+    """The inclusive period end / payday (e.g. 13 Oct for a joining-day-13 cycle)."""
     day = cycle_day_for(employee)
     if day == 1:
         _, end = month_range(year, month)
@@ -90,12 +88,30 @@ def period_containing(employee: Employee, for_date: date):
     day = cycle_day_for(employee)
     if day == 1:
         return for_date.year, for_date.month
-    # Payday still belongs to the period that ends that day; the next cycle
-    # begins the following calendar day (clears Taken / Salary Generated).
+    # Payday closes this period; the next cycle (and cleared Taken / salary)
+    # begins the following calendar day.
     if for_date.day <= day:
         return for_date.year, for_date.month
     next_y, next_m = _shift_month(for_date.year, for_date.month, 1)
     return next_y, next_m
+
+
+def paid_cycle_range(employee: Employee, year: int, month: int):
+    """
+    Non-overlapping paid window for Taken / salary math.
+
+    The calendar strip is joining-day → joining-day (inclusive). Consecutive
+    strips share that payday; paid days assign the shared day to the period
+    that ends on it, so the next period's paid start is the day after.
+    """
+    start, end = cycle_range(employee, year, month)
+    if cycle_day_for(employee) == 1:
+        return start, end
+    if period_containing(employee, start) != (year, month):
+        start = start + timedelta(days=1)
+    if start > end:
+        return end, end
+    return start, end
 
 
 def effective_method(employee: Employee, settings_obj: SalaryBookSettings):
@@ -112,7 +128,7 @@ def divisor_for(year, month, method, fixed_days, employee: Employee | None = Non
     if method == SalaryBookSettings.METHOD_FIXED:
         return int(fixed_days or 26)
     if employee is not None:
-        start, end = cycle_range(employee, year, month)
+        start, end = paid_cycle_range(employee, year, month)
         return (end - start).days + 1
     return calendar.monthrange(year, month)[1]
 
@@ -120,7 +136,7 @@ def divisor_for(year, month, method, fixed_days, employee: Employee | None = Non
 def coverage_end(year, month, today=None, employee: Employee | None = None):
     today = today or timezone.localdate()
     if employee is not None:
-        start, end = cycle_range(employee, year, month)
+        start, end = paid_cycle_range(employee, year, month)
         if start <= today <= end:
             return today
         return end
@@ -131,7 +147,7 @@ def coverage_end(year, month, today=None, employee: Employee | None = None):
 
 
 def iter_expected_dates(employee: Employee, year, month, today=None):
-    start, _ = cycle_range(employee, year, month)
+    start, _ = paid_cycle_range(employee, year, month)
     end = coverage_end(year, month, today, employee=employee)
     join = employee.date_of_joining
     cursor = max(start, join)
@@ -142,7 +158,7 @@ def iter_expected_dates(employee: Employee, year, month, today=None):
 
 def iter_pre_join_dates(employee: Employee, year, month, today=None):
     """Days in the covered cycle window that fall before date_of_joining."""
-    start, _ = cycle_range(employee, year, month)
+    start, _ = paid_cycle_range(employee, year, month)
     end = coverage_end(year, month, today, employee=employee)
     join = employee.date_of_joining
     if join <= start:
@@ -226,7 +242,9 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
     sched_hours = scheduled_hours(employee, settings_obj)
     hourly = _q(daily / sched_hours, FOUR) if sched_hours else ZERO
 
-    start, end = cycle_range(employee, year, month)
+    # Calendar strip: joining day → joining day. Paid math: non-overlapping window.
+    strip_start, _strip_end = cycle_range(employee, year, month)
+    start, end = paid_cycle_range(employee, year, month)
     end_marker = cycle_end_marker(employee, year, month)
     cycle_day = cycle_day_for(employee)
     rows = {
@@ -300,8 +318,8 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
         'Half day is capped at half of daily salary.',
         'Salary calculation starts from the employee date of joining; earlier days are unpaid.',
-        f'Salary cycle payday is day {cycle_day} '
-        f'({start.isoformat()} → {end_marker.isoformat()}); the next cycle starts the day after.',
+        f'Salary cycle follows joining day {cycle_day} '
+        f'({strip_start.isoformat()} → {end_marker.isoformat()}); next cycle starts the day after payday.',
         'Active salary advances in this cycle reduce net payable.',
         'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
     ]
@@ -317,7 +335,7 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'employee_name': employee.name,
         'year': year,
         'month': month,
-        'period_start': start.isoformat(),
+        'period_start': strip_start.isoformat(),
         'period_end': end.isoformat(),
         'period_end_marker': end_marker.isoformat(),
         'salary_cycle_start_day': cycle_day,

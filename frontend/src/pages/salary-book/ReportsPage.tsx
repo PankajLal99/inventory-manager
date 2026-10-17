@@ -142,7 +142,7 @@ export default function ReportsPage() {
       {kind && (
         <div className="space-y-3">
           <p className="text-xs text-gray-500">
-            Reports use each employee&apos;s salary cycle payday (e.g. day after previous 9th → this 9th), not only 1st–last calendar dates.
+            Reports use each employee&apos;s joining-day cycle (e.g. 13th → next 13th), not only 1st–last calendar dates.
           </p>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             <Select label="Month" value={String(month)} onChange={(e) => setMonth(Number(e.target.value))}>

@@ -38,7 +38,7 @@ export default function SalaryBookPage() {
         <div>
           <h1 className="text-xl font-bold">Salary Book</h1>
           <p className="text-xs text-gray-500 mt-0.5">
-            Month = each employee&apos;s cycle end month (e.g. day 9 → day after previous 9th through this 9th).
+            Month = each employee&apos;s cycle end month (joining day, e.g. 13th → next 13th).
           </p>
         </div>
         <select

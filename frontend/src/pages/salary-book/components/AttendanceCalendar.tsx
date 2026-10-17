@@ -687,8 +687,8 @@ function formatCycleBound(
 }
 
 /**
- * Build cycle strip for cycleDay > 1: day after previous payday → this payday.
- * Example day 13, November → 14 Oct … 13 Nov. Else calendar 1…last.
+ * Build cycle strip for cycleDay > 1: previous joining day → this joining day.
+ * Example day 13, October → 13 Sep … 13 Oct (31 days). Else calendar 1…last.
  */
 function buildCycleWindowList(
   employee: CalendarEmployee,
@@ -716,12 +716,11 @@ function buildCycleWindowList(
   let startIso = rangeStartIso || undefined;
   let endIso = rangeEndIso || undefined;
   if (!startIso || !endIso) {
-    // Period ending this month: day after previous payday → this payday
+    // Period ending this month: previous joining day → this joining day
     const prev = month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 };
-    const prevPayday = Math.min(cycleDay, new Date(prev.y, prev.m, 0).getDate());
-    const startParts = addCalendarDays(prev.y, prev.m, prevPayday, 1);
+    const startD = Math.min(cycleDay, new Date(prev.y, prev.m, 0).getDate());
     const endD = Math.min(cycleDay, daysInMonth);
-    startIso = isoFromParts(startParts.y, startParts.m, startParts.d);
+    startIso = isoFromParts(prev.y, prev.m, startD);
     endIso = isoFromParts(year, month, endD);
   }
 
@@ -857,10 +856,10 @@ export function EmployeeMonthGrid({
     <div className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 lg:p-6 space-y-2">
       {cycleDay > 1 && dayList.length > 0 ? (
         <p className="text-xs text-emerald-800 font-medium px-0.5">
-          Salary cycle day {cycleDay}: grid shows{' '}
+          Cycle from joining day {cycleDay}:{' '}
           {formatCycleBound(employee.period_start, dayList[0])} →{' '}
           {formatCycleBound(employee.period_end_marker, dayList[dayList.length - 1])}{' '}
-          (payday on the {cycleDay}th; next cycle starts the day after)
+          ({dayList.length} days; next cycle starts the day after payday)
         </p>
       ) : null}
 

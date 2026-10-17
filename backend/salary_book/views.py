@@ -64,6 +64,7 @@ from .services.salary_calculator import (
     cycle_range,
     month_is_finalized,
     month_range,
+    paid_cycle_range,
     period_containing,
     refresh_payment_status,
 )
@@ -428,7 +429,7 @@ def _employee_history_month_filter(qs, request, date_field, employee=None):
         try:
             y, m = int(year), int(month)
             if employee is not None:
-                start, end = cycle_range(employee, y, m)
+                start, end = paid_cycle_range(employee, y, m)
             else:
                 start, end = month_range(y, m)
             qs = qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
@@ -438,18 +439,18 @@ def _employee_history_month_filter(qs, request, date_field, employee=None):
 
 
 def _filter_qs_by_employee_cycles(qs, year, month, date_field='date', employee_id=None):
-    """Filter rows so each employee uses their own salary cycle for (year, month)."""
+    """Filter rows so each employee uses their own paid salary cycle for (year, month)."""
     if employee_id:
         employee = Employee.objects.filter(pk=employee_id).first()
         if not employee:
             return qs.none()
-        start, end = cycle_range(employee, year, month)
+        start, end = paid_cycle_range(employee, year, month)
         return qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
 
     q = Q()
     has_any = False
     for emp in Employee.objects.only('id', 'salary_cycle_start_day'):
-        start, end = cycle_range(emp, year, month)
+        start, end = paid_cycle_range(emp, year, month)
         q |= Q(**{'employee_id': emp.id, f'{date_field}__gte': start, f'{date_field}__lte': end})
         has_any = True
     if not has_any:
@@ -1543,12 +1544,16 @@ def attendance_calendar(request):
     for emp in employees:
         counts = _status_counts()
         days = {}
-        emp_start, emp_end = cycle_range(emp, year, month) if view == 'admin' else (period_start, period_end)
+        if view == 'admin':
+            emp_start, emp_end = cycle_range(emp, year, month)
+        else:
+            emp_start, emp_end = period_start, period_end
+        paid_start, paid_end = paid_cycle_range(emp, year, month)
         # Grid always shows the selected calendar month days; cycle days outside
         # this month are still counted in salary but marked on the month grid.
         for day in range(1, days_in_month + 1):
             cell_date = date(year, month, day)
-            in_cycle = emp_start <= cell_date <= emp_end
+            in_cycle = paid_start <= cell_date <= paid_end
             if emp.date_of_joining and cell_date < emp.date_of_joining:
                 days[str(day)] = {'status': 'BEFORE_JOINING', 'in_cycle': in_cycle}
                 continue
@@ -1569,13 +1574,13 @@ def attendance_calendar(request):
                     counts['unmarked'] += 1
                     team['unmarked'] += 1
 
-        # Full UI cycle: start day → next start day (inclusive end marker), e.g. 14 Sep → 14 Oct.
+        # Full UI cycle: joining day → next joining day (e.g. 13 Sep → 13 Oct = 31 days).
         emp_end_marker = cycle_end_marker(emp, year, month)
         cycle_days = {}
         cursor = emp_start
         while cursor <= emp_end_marker:
             iso = cursor.isoformat()
-            in_salary_window = emp_start <= cursor <= emp_end
+            in_salary_window = paid_start <= cursor <= paid_end
             if emp.date_of_joining and cursor < emp.date_of_joining:
                 cycle_days[iso] = {
                     'status': 'BEFORE_JOINING',

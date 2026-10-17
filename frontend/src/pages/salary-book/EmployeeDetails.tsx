@@ -126,7 +126,7 @@ export default function EmployeeDetails() {
             label="Salary cycle day"
             value={
               data.salary_cycle_start_day && data.salary_cycle_start_day > 1
-                ? `Payday on the ${data.salary_cycle_start_day}th (next cycle starts the day after)`
+                ? `Joining day ${data.salary_cycle_start_day}th → next ${data.salary_cycle_start_day}th`
                 : '1st (calendar month)'
             }
           />
