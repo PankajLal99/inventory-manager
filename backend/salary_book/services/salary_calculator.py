@@ -34,12 +34,12 @@ def month_range(year, month):
 
 
 def clamp_cycle_day(day) -> int:
-    """Salary cycle day is 1–28 so every month has that calendar day."""
+    """Salary cycle day is 1–31. Shorter months use the last day (_safe_day)."""
     try:
         value = int(day or 1)
     except (TypeError, ValueError):
         value = 1
-    return max(1, min(28, value))
+    return max(1, min(31, value))
 
 
 def cycle_day_for(employee: Employee) -> int:

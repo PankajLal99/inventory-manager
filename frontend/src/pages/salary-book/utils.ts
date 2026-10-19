@@ -101,7 +101,7 @@ export function periodContaining(
   cycleDay: number | null | undefined,
   forDate: Date = new Date(),
 ): { year: number; month: number } {
-  const day = Math.min(28, Math.max(1, Number(cycleDay) || 1));
+  const day = Math.min(31, Math.max(1, Number(cycleDay) || 1));
   const year = forDate.getFullYear();
   const month = forDate.getMonth() + 1;
   const dom = forDate.getDate();

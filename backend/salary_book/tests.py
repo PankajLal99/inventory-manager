@@ -185,6 +185,38 @@ class AuthTests(SalaryBookMixin, APITestCase):
         self.assertIn('2026-11-13', row['cycle_days'])
         self.assertNotIn('2026-09-13', row['cycle_days'])
 
+    def test_joining_on_30th_uses_cycle_day_30(self):
+        """Join dates after the 28th must keep that day (not clamp to 28)."""
+        emp = self.make_employee(
+            name='Late Month',
+            employee_id='EMP-30',
+            date_of_joining=date(2026, 8, 28),
+            salary_cycle_start_day=28,
+        )
+        self.client.force_authenticate(user=self.allowed)
+        patch = self.client.patch(
+            reverse('salary-book-employee-detail', args=[emp.id]),
+            {'date_of_joining': '2026-09-30'},
+            format='json',
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch.data['date_of_joining'], '2026-09-30')
+        self.assertEqual(patch.data['salary_cycle_start_day'], 30)
+
+        with mock.patch(
+            'backend.salary_book.views.timezone.localdate',
+            return_value=date(2026, 10, 19),
+        ):
+            res = self.client.get(
+                reverse('salary-book-calendar'),
+                {'year': 2026, 'month': 10, 'employee': emp.id},
+            )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        row = res.data['employees'][0]
+        self.assertEqual(row['salary_cycle_start_day'], 30)
+        self.assertEqual(row['period_start'], '2026-09-30')
+        self.assertEqual(row['period_end_marker'], '2026-10-30')
+
     def test_joining_date_change_updates_calendar_cycle(self):
         """Changing date_of_joining must realign cycle day and calendar strip."""
         emp = self.make_employee(

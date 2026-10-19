@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
 
@@ -172,10 +172,11 @@ class Employee(models.Model):
     blood_group = models.CharField(max_length=8, blank=True, choices=BLOOD_GROUP_CHOICES)
     date_of_joining = models.DateField()
     # Payday day-of-month (e.g. 13 → day after previous 13th through this 13th). 1 = calendar month.
+    # Values 29–31 use the last day of shorter months (e.g. Feb).
     salary_cycle_start_day = models.PositiveSmallIntegerField(
         default=1,
-        validators=[MinValueValidator(1)],
-        help_text='Salary cycle start/end day (1–28). Example: 9 means 9th → next 9th.',
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text='Salary cycle start/end day (1–31). Example: 30 means 30th → next 30th (Feb uses last day).',
     )
     designation = models.CharField(max_length=100, blank=True)
     department = models.CharField(max_length=100, blank=True)
@@ -231,9 +232,9 @@ class Employee(models.Model):
                 raise ValidationError(
                     {'alternate_contact': 'Enter a valid 10-digit Indian mobile number.'}
                 )
-        if self.salary_cycle_start_day is not None and not (1 <= int(self.salary_cycle_start_day) <= 28):
+        if self.salary_cycle_start_day is not None and not (1 <= int(self.salary_cycle_start_day) <= 31):
             raise ValidationError(
-                {'salary_cycle_start_day': 'Must be between 1 and 28.'}
+                {'salary_cycle_start_day': 'Must be between 1 and 31.'}
             )
         if self.check_in_buffer_minutes is not None and int(self.check_in_buffer_minutes) > 120:
             raise ValidationError(

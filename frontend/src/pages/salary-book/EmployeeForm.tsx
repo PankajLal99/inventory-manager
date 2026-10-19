@@ -17,7 +17,7 @@ const BLOOD = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 function cycleDayFromISO(iso: string) {
   const day = Number(String(iso || '').slice(8, 10));
   if (!Number.isFinite(day) || day < 1) return '1';
-  return String(Math.min(28, day));
+  return String(Math.min(31, day));
 }
 
 const emptyJoin = todayISO();
@@ -80,7 +80,13 @@ export default function EmployeeForm() {
       address: data.address || '',
       blood_group: data.blood_group || '',
       date_of_joining: data.date_of_joining,
-      salary_cycle_start_day: String(data.salary_cycle_start_day || 1),
+      salary_cycle_start_day: (() => {
+        const fromJoin = cycleDayFromISO(data.date_of_joining);
+        const stored = String(data.salary_cycle_start_day || 1);
+        // Legacy cap was 28 — if they joined on 29–31 but cycle is still 28, follow join.
+        if (Number(fromJoin) > 28 && stored === '28') return fromJoin;
+        return stored;
+      })(),
       designation: data.designation || '',
       department: data.department || '',
       monthly_salary: String(data.monthly_salary),
@@ -101,7 +107,7 @@ export default function EmployeeForm() {
         ...form,
         employee_id: form.employee_id || undefined,
         monthly_salary: form.monthly_salary,
-        salary_cycle_start_day: Math.min(28, Math.max(1, Number(form.salary_cycle_start_day) || 1)),
+        salary_cycle_start_day: Math.min(31, Math.max(1, Number(form.salary_cycle_start_day) || 1)),
         fixed_working_days: form.fixed_working_days ? Number(form.fixed_working_days) : null,
         expected_check_in: form.expected_check_in || null,
         expected_check_out: form.expected_check_out || null,
@@ -191,17 +197,17 @@ export default function EmployeeForm() {
       </div>
       <div>
         <Input
-          label="Salary cycle day (1–28)"
+          label="Salary cycle day (1–31)"
           type="number"
           min={1}
-          max={28}
+          max={31}
           required
           value={form.salary_cycle_start_day}
           onChange={(e) => set('salary_cycle_start_day', e.target.value)}
         />
         <p className="mt-1 text-xs text-gray-500">
-          Taken from the start-date day (e.g. joined on the 13th → 13th → 13th cycles). Use 1 for a normal calendar
-          month.
+          Taken from the start-date day (e.g. joined on the 30th → 30th → 30th cycles; shorter months use the last
+          day). Use 1 for a normal calendar month.
         </p>
       </div>
       <Input label="Designation" value={form.designation} onChange={(e) => set('designation', e.target.value)} />

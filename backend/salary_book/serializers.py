@@ -242,8 +242,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def validate_salary_cycle_start_day(self, value):
         if value is None:
             return 1
-        if not (1 <= int(value) <= 28):
-            raise serializers.ValidationError('Must be between 1 and 28.')
+        if not (1 <= int(value) <= 31):
+            raise serializers.ValidationError('Must be between 1 and 31.')
         return int(value)
 
     def validate_check_in_buffer_minutes(self, value):
@@ -299,7 +299,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def _cycle_day_from_joining(join_date):
         if not join_date:
             return 1
-        return max(1, min(28, int(join_date.day)))
+        return max(1, min(31, int(join_date.day)))
 
     def create(self, validated_data):
         if validated_data.get('date_of_joining') and 'salary_cycle_start_day' not in validated_data:
@@ -320,9 +320,12 @@ class EmployeeSerializer(serializers.ModelSerializer):
         ):
             old_join = instance.date_of_joining
             old_cycle = int(instance.salary_cycle_start_day or 1)
+            old_join_day = self._cycle_day_from_joining(old_join) if old_join else 1
+            # Treat legacy 28-cap (join 29–31 stored as 28) as still "aligned".
             was_aligned = (
                 old_join is None
-                or old_cycle == self._cycle_day_from_joining(old_join)
+                or old_cycle == old_join_day
+                or (old_cycle == 28 and old_join_day > 28)
             )
             if was_aligned:
                 validated_data['salary_cycle_start_day'] = self._cycle_day_from_joining(
