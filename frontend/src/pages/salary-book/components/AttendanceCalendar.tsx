@@ -33,6 +33,14 @@ function shortTime(iso: string | null | undefined) {
   return formatted.replace(/\s?(am|pm|AM|PM)/, '').replace(/^0/, '');
 }
 
+/** Compact 24h HH:MM so afternoon punches are not confused with morning (13:15 vs 1:15). */
+function stripTime(iso: string | null | undefined) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function cellTitle(cell: CalendarDayCell | undefined, iso: string) {
   if (!cell?.status || cell.status === 'BEFORE_JOINING') return iso;
   return [
@@ -977,8 +985,7 @@ export function EmployeeMonthGrid({
 }
 
 /**
- * Mobile admin day cell — in/out times always visible (no tap needed).
- * Layout: day label + stacked in (top) / out (bottom) times.
+ * Admin day cell — one square: day/month on top, status or IN/OUT below (no separate floating label).
  */
 function AdminStripDay({
   year,
@@ -1003,8 +1010,8 @@ function AdminStripDay({
   const status = cell?.status;
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const inTime = shortTime(cell?.check_in_time);
-  const outTime = shortTime(cell?.check_out_time);
+  const inTime = stripTime(cell?.check_in_time);
+  const outTime = stripTime(cell?.check_out_time);
   const hasPunches = Boolean(inTime || outTime);
 
   const lateIn = Boolean(cell?.is_late);
@@ -1016,16 +1023,19 @@ function AdminStripDay({
       ? 'bg-orange-500 text-white'
       : 'bg-sky-600 text-white';
 
+  let dateTone = 'bg-slate-100 text-gray-700 border-b border-slate-200';
+  if (sunday) dateTone = 'bg-rose-100 text-rose-700 border-b border-rose-200';
+  else if (isToday) dateTone = 'bg-emerald-100 text-emerald-900 border-b border-emerald-200';
+
   let body: ReactNode;
   if (hasPunches && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
-    // Always show both rows so cell height stays even across days.
     body = (
-      <div className="flex w-full flex-col overflow-hidden rounded">
-        <div className={`flex h-4 items-center justify-center px-px ${inBg}`}>
-          <span className="text-[9px] font-semibold leading-none tabular-nums">{inTime || '—'}</span>
+      <div className="flex w-full flex-1 flex-col">
+        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${inBg}`}>
+          <span className="text-[10px] font-semibold leading-none tabular-nums">{inTime || '—'}</span>
         </div>
-        <div className={`flex h-4 items-center justify-center px-px ${outBg}`}>
-          <span className="text-[9px] font-semibold leading-none tabular-nums">
+        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${outBg}`}>
+          <span className="text-[10px] font-semibold leading-none tabular-nums">
             {isFuture ? '—' : outTime || (isToday && !outTime ? '…' : '—')}
           </span>
         </div>
@@ -1033,60 +1043,47 @@ function AdminStripDay({
     );
   } else if (sunday && !marked) {
     body = (
-      <div className="flex h-8 w-full items-center justify-center rounded bg-rose-50">
-        <span className="text-[9px] font-semibold text-rose-600">Sun</span>
+      <div className="flex flex-1 items-center justify-center bg-rose-50 px-0.5 py-2">
+        <span className="text-[10px] font-semibold text-rose-600">Sun</span>
       </div>
     );
   } else if (status && status !== 'BEFORE_JOINING') {
     const style = STATUS_STYLE[status];
     body = (
       <div
-        className={`flex h-8 w-full flex-col items-center justify-center rounded ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'}`}
+        className={`flex flex-1 flex-col items-center justify-center px-0.5 py-2 ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'}`}
       >
-        <span className="text-[10px] font-bold leading-none">{style?.short || status}</span>
+        <span className="text-xs font-bold leading-none">{style?.short || status}</span>
       </div>
     );
   } else if (isFuture || status === 'BEFORE_JOINING') {
     body = (
-      <div className="flex h-8 w-full items-center justify-center rounded bg-gray-50 text-gray-300">
-        <span className="text-xs leading-none">-</span>
+      <div className="flex flex-1 items-center justify-center bg-gray-50 px-0.5 py-2 text-gray-300">
+        <span className="text-xs leading-none">—</span>
       </div>
     );
   } else if (isPast) {
     body = (
-      <div className="flex h-8 w-full flex-col items-center justify-center rounded bg-red-500 text-white">
-        <span className="text-[10px] font-bold leading-none">A</span>
-        {onAdd && <span className="mt-0.5 text-[7px] font-medium leading-none opacity-90">Add</span>}
+      <div className="flex flex-1 flex-col items-center justify-center bg-red-500 px-0.5 py-2 text-white">
+        <span className="text-xs font-bold leading-none">A</span>
+        {onAdd ? <span className="mt-0.5 text-[8px] font-medium leading-none opacity-90">Add</span> : null}
       </div>
     );
   } else {
-    // Today unmarked
     body = (
-      <div
-        className={`flex h-8 w-full items-center justify-center rounded bg-white text-emerald-700 ring-1 ring-dashed ring-emerald-400 ${
-          isToday ? 'ring-2 ring-emerald-500' : ''
-        }`}
-      >
-        <span className="text-[9px] font-medium leading-none">{onAdd ? 'Add' : '-'}</span>
+      <div className="flex flex-1 items-center justify-center bg-white px-0.5 py-2 text-emerald-700">
+        <span className="text-[10px] font-medium leading-none">{onAdd ? 'Add' : '—'}</span>
       </div>
     );
   }
 
   const box = (
     <div
-      className={`overflow-hidden rounded-lg border ${
-        sunday ? 'border-rose-200' : 'border-gray-200'
-      } ${isToday ? 'ring-2 ring-emerald-700' : ''} ${isFuture ? 'opacity-45' : ''}`}
+      className={`flex h-[4.25rem] w-full flex-col overflow-hidden rounded-md border ${
+        sunday ? 'border-rose-300' : isToday ? 'border-emerald-600' : 'border-slate-300'
+      } ${isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''} ${isFuture ? 'opacity-45' : ''}`}
     >
-      <div
-        className={`py-0.5 text-center text-[10px] font-semibold tabular-nums leading-none ${
-          sunday
-            ? 'bg-rose-50 text-rose-600'
-            : isToday
-              ? 'bg-emerald-50 text-emerald-800'
-              : 'bg-slate-50 text-gray-600'
-        }`}
-      >
+      <div className={`shrink-0 py-1 text-center text-[10px] font-bold tabular-nums leading-none ${dateTone}`}>
         {day}/{month}
       </div>
       {body}
@@ -1099,7 +1096,7 @@ function AdminStripDay({
         type="button"
         title={cellTitle(cell, iso)}
         onClick={onAdd}
-        className="w-full min-w-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg"
+        className="w-full min-w-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-md"
         aria-label={`${day}/${month}, attendance`}
       >
         {box}
@@ -1207,7 +1204,7 @@ export function AdminMonthGrid({
                     {group.items.map((item) => {
                       const click = dayClickProps(emp, item.iso, item.cell);
                       return (
-                        <div key={item.iso} className="w-[4.25rem]">
+                        <div key={item.iso} className="w-[4.5rem]">
                           <AdminStripDay
                             year={item.y}
                             month={item.m}
