@@ -288,10 +288,13 @@ function InOutSplitCell({
   cell,
   isToday,
   compact,
+  embedded,
 }: {
   cell: CalendarDayCell;
   isToday: boolean;
   compact?: boolean;
+  /** Flat edges when the day/month header already owns the outer box. */
+  embedded?: boolean;
 }) {
   const lateIn = Boolean(cell.is_late);
   const earlyOut = Boolean(cell.is_early && cell.check_out_time);
@@ -301,15 +304,13 @@ function InOutSplitCell({
     : earlyOut
       ? 'bg-orange-500 text-white'
       : 'bg-sky-600 text-white';
+  const round = embedded ? '' : 'rounded-lg';
+  const todayRing = !embedded && isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : '';
 
   // Compact (admin mobile strip): stack IN/OUT vertically so narrow columns stay readable.
   if (compact) {
     return (
-      <div
-        className={`flex h-full w-full flex-col overflow-hidden rounded-lg min-h-[3.25rem] ${
-          isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
-        }`}
-      >
+      <div className={`flex h-full w-full flex-col overflow-hidden min-h-[3.25rem] ${round} ${todayRing}`}>
         <div className={`flex flex-1 items-center justify-center px-0.5 py-0.5 ${inBg}`}>
           <span className="text-[10px] font-semibold leading-none tabular-nums">
             {shortTime(cell.check_in_time) || '—'}
@@ -325,11 +326,7 @@ function InOutSplitCell({
   }
 
   return (
-    <div
-      className={`flex h-full w-full overflow-hidden rounded-lg min-h-[3.75rem] ${
-        isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
-      }`}
-    >
+    <div className={`flex h-full w-full overflow-hidden min-h-[3.75rem] ${round} ${todayRing}`}>
       <div className={`flex flex-1 flex-col items-center justify-center px-1 py-1.5 ${inBg}`}>
         <span className="text-[10px] font-semibold uppercase leading-none tracking-wide opacity-90">IN</span>
         <span className="mt-1 text-sm font-semibold leading-none tabular-nums">
@@ -354,6 +351,7 @@ function DayStatusCell({
   isToday,
   isPast,
   compact,
+  embedded,
   clickable,
   onClick,
 }: {
@@ -364,6 +362,7 @@ function DayStatusCell({
   isToday: boolean;
   isPast?: boolean;
   compact?: boolean;
+  embedded?: boolean;
   clickable?: boolean;
   onClick?: () => void;
 }) {
@@ -372,6 +371,8 @@ function DayStatusCell({
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const minH = compact ? 'min-h-[3.25rem]' : 'min-h-[3.75rem]';
   const interactive = Boolean(clickable && onClick);
+  const round = embedded ? '' : 'rounded-lg';
+  const todayRing = !embedded && isToday;
 
   const wrap = (node: ReactNode, className = '') => {
     if (!interactive) return node;
@@ -383,7 +384,7 @@ function DayStatusCell({
           e.stopPropagation();
           onClick?.();
         }}
-        className={`block h-full w-full text-left cursor-pointer hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg ${className}`}
+        className={`block h-full w-full text-left cursor-pointer hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${embedded ? '' : 'rounded-lg'} ${className}`}
         aria-label={`${marked ? 'Edit' : 'Add'} attendance for day ${day}`}
       >
         {node}
@@ -395,8 +396,8 @@ function DayStatusCell({
   if (sunday && !marked) {
     return wrap(
       <div
-        className={`flex h-full w-full items-center justify-center rounded-lg bg-rose-50 px-0.5 ${minH} ${
-          isToday ? 'ring-2 ring-emerald-500' : ''
+        className={`flex h-full w-full items-center justify-center bg-rose-50 px-0.5 ${minH} ${round} ${
+          todayRing ? 'ring-2 ring-emerald-500' : ''
         } ${interactive ? 'ring-1 ring-dashed ring-rose-200' : ''}`}
       >
         <span
@@ -412,7 +413,7 @@ function DayStatusCell({
 
   if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
     return wrap(
-      <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} />,
+      <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} embedded={embedded} />,
       interactive ? 'ring-1 ring-dashed ring-emerald-300' : ''
     );
   }
@@ -422,7 +423,7 @@ function DayStatusCell({
     if (isPast && status !== 'BEFORE_JOINING') {
       return wrap(
         <div
-          className={`flex h-full w-full flex-col items-center justify-center rounded-lg bg-red-500 text-white ${minH} ${
+          className={`flex h-full w-full flex-col items-center justify-center bg-red-500 text-white ${minH} ${round} ${
             interactive ? 'ring-1 ring-dashed ring-red-200 hover:opacity-90' : ''
           }`}
         >
@@ -438,8 +439,8 @@ function DayStatusCell({
 
     return wrap(
       <div
-        className={`flex h-full w-full items-center justify-center rounded-lg bg-gray-100 text-gray-400 ${minH} ${
-          isToday ? 'ring-2 ring-emerald-500' : ''
+        className={`flex h-full w-full items-center justify-center bg-gray-100 text-gray-400 ${minH} ${round} ${
+          todayRing ? 'ring-2 ring-emerald-500' : ''
         } ${interactive ? 'ring-1 ring-dashed ring-emerald-300 hover:bg-emerald-50 hover:text-emerald-700' : ''}`}
       >
         <span className={`leading-none ${interactive ? (compact ? 'text-[10px] font-medium' : 'text-xs font-medium') : 'text-base'}`}>
@@ -452,8 +453,8 @@ function DayStatusCell({
   const style = STATUS_STYLE[status];
   return wrap(
     <div
-      className={`flex h-full w-full flex-col items-center justify-center rounded-lg ${minH} ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'} ${
-        isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
+      className={`flex h-full w-full flex-col items-center justify-center ${minH} ${round} ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'} ${
+        todayRing ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
       } ${interactive ? 'ring-1 ring-dashed ring-white/50' : ''}`}
     >
       {status === 'HOLIDAY' ? (
@@ -1156,76 +1157,154 @@ export function AdminMonthGrid({
     };
   };
 
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] sm:text-xs text-gray-500 px-0.5">
-        Each box is day/month. Green = in, blue = out. Months are separate rows — open an employee to change month.
-      </p>
-      {employees.map((emp) => {
-        const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
-        const cycleDay = emp.salary_cycle_start_day || 1;
-        const months = groupDaysByMonth(dayList);
-        return (
-          <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-3 py-3 sm:px-4">
-            <div className="flex flex-wrap items-center gap-2 mb-2 min-h-8">
-              <Link
-                to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
-                className="min-w-0 flex-1"
-              >
-                <div className="font-semibold text-sm sm:text-base text-gray-900 hover:text-emerald-800 truncate">
-                  {emp.name}
-                </div>
-                <div className="text-[11px] sm:text-xs text-gray-500">
-                  {emp.employee_id}
-                  {cycleDay > 1 && (emp.period_start || dayList[0]) && (emp.period_end_marker || dayList[dayList.length - 1])
-                    ? ` · ${formatCycleBound(emp.period_start, dayList[0])} → ${formatCycleBound(emp.period_end_marker, dayList[dayList.length - 1])}`
-                    : ''}
-                </div>
-              </Link>
-              {onAddAmount && (
-                <button
-                  type="button"
-                  onClick={() => onAddAmount(emp)}
-                  className="shrink-0 inline-flex items-center gap-1 min-h-9 px-2.5 rounded-full border border-emerald-500 text-emerald-800 text-xs sm:text-sm font-semibold"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add Amount
-                </button>
-              )}
-              <span className="shrink-0 text-xs sm:text-sm font-semibold text-emerald-800 tabular-nums">
-                {emp.counts.PRESENT}P
-              </span>
-            </div>
-            <div className="space-y-2">
-              {months.map((group) => (
-                <div key={group.key}>
-                  <div className="mb-1 text-[11px] font-semibold text-gray-500">{group.label}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {group.items.map((item) => {
-                      const click = dayClickProps(emp, item.iso, item.cell);
-                      return (
-                        <div key={item.iso} className="w-[4.5rem]">
-                          <AdminStripDay
-                            year={item.y}
-                            month={item.m}
-                            day={item.d}
-                            cell={item.cell}
-                            isToday={item.iso === today}
-                            isPast={item.iso < today}
-                            isFuture={item.iso > today}
-                            onAdd={click.onClick}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <EmployeeMoneyFooter emp={emp} />
-          </div>
-        );
-      })}
+  const employeeHeader = (emp: CalendarEmployee, dayList: CycleDayItem[], cycleDay: number) => (
+    <div className="flex flex-wrap items-center gap-2 mb-2 min-h-8 lg:gap-3 lg:px-4 lg:py-3 lg:mb-0 lg:border-b lg:border-emerald-50">
+      <Link
+        to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
+        className="min-w-0 flex-1"
+      >
+        <div className="font-semibold text-sm sm:text-base text-gray-900 hover:text-emerald-800 truncate">
+          {emp.name}
+        </div>
+        <div className="text-[11px] sm:text-xs text-gray-500">
+          {emp.employee_id}
+          {cycleDay > 1 && (emp.period_start || dayList[0]) && (emp.period_end_marker || dayList[dayList.length - 1])
+            ? ` · ${formatCycleBound(emp.period_start, dayList[0])} → ${formatCycleBound(emp.period_end_marker, dayList[dayList.length - 1])}`
+            : ''}
+        </div>
+      </Link>
+      {onAddAmount && (
+        <button
+          type="button"
+          onClick={() => onAddAmount(emp)}
+          className="shrink-0 inline-flex items-center gap-1 min-h-9 px-2.5 rounded-full border border-emerald-500 text-emerald-800 text-xs sm:text-sm font-semibold lg:min-h-10 lg:px-3"
+        >
+          <Plus className="h-3.5 w-3.5 lg:h-4 lg:w-4" />
+          Add Amount
+        </button>
+      )}
+      <span className="shrink-0 text-xs sm:text-sm font-semibold text-emerald-800 tabular-nums">
+        {emp.counts.PRESENT}P
+      </span>
     </div>
+  );
+
+  return (
+    <>
+      {/* Mobile: compact day/month squares (was already fine) */}
+      <div className="lg:hidden space-y-3">
+        <p className="text-[11px] text-gray-500 px-0.5">
+          Each box is day/month. Green = in · Blue = out. Months are separate rows.
+        </p>
+        {employees.map((emp) => {
+          const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
+          const cycleDay = emp.salary_cycle_start_day || 1;
+          const months = groupDaysByMonth(dayList);
+          return (
+            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-3 py-3">
+              {employeeHeader(emp, dayList, cycleDay)}
+              <div className="space-y-2">
+                {months.map((group) => (
+                  <div key={group.key}>
+                    <div className="mb-1 text-[11px] font-semibold text-gray-500">{group.label}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {group.items.map((item) => {
+                        const click = dayClickProps(emp, item.iso, item.cell);
+                        return (
+                          <div key={item.iso} className="w-[4.5rem]">
+                            <AdminStripDay
+                              year={item.y}
+                              month={item.m}
+                              day={item.d}
+                              cell={item.cell}
+                              isToday={item.iso === today}
+                              isPast={item.iso < today}
+                              isFuture={item.iso > today}
+                              onAdd={click.onClick}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <EmployeeMoneyFooter emp={emp} />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop: larger IN/OUT cells, still fixed monthly rows (no sideways scroll) */}
+      <div className="hidden lg:block space-y-4">
+        <p className="text-xs text-gray-500 px-0.5">
+          Day/month is inside each box. Months wrap as rows — open an employee to change month.
+        </p>
+        {employees.map((emp) => {
+          const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
+          const cycleDay = emp.salary_cycle_start_day || 1;
+          const months = groupDaysByMonth(dayList);
+          return (
+            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
+              {employeeHeader(emp, dayList, cycleDay)}
+              <div className="px-4 py-3 space-y-3">
+                {months.map((group) => (
+                  <div key={group.key}>
+                    <div className="mb-1.5 text-xs font-semibold text-gray-500">{group.label}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {group.items.map((item) => {
+                        const click = dayClickProps(emp, item.iso, item.cell);
+                        const sunday = isSunday(item.y, item.m, item.d);
+                        return (
+                          <div
+                            key={item.iso}
+                            className={`w-[5.75rem] overflow-hidden rounded-lg border ${
+                              sunday
+                                ? 'border-rose-300'
+                                : item.iso === today
+                                  ? 'border-emerald-600 ring-2 ring-emerald-700 ring-offset-1'
+                                  : 'border-slate-200'
+                            } ${item.iso > today ? 'opacity-45' : ''}`}
+                            title={cellTitle(item.cell, item.iso)}
+                          >
+                            <div
+                              className={`py-1 text-center text-xs font-bold tabular-nums leading-none border-b ${
+                                sunday
+                                  ? 'bg-rose-100 text-rose-700 border-rose-200'
+                                  : item.iso === today
+                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-200'
+                                    : 'bg-slate-50 text-gray-700 border-slate-200'
+                              }`}
+                            >
+                              {item.d}/{item.m}
+                              <span className="ml-1 text-[10px] font-medium opacity-80">
+                                {weekdayShort(item.y, item.m, item.d)}
+                              </span>
+                            </div>
+                            <DayStatusCell
+                              year={item.y}
+                              month={item.m}
+                              day={item.d}
+                              cell={item.cell}
+                              isToday={false}
+                              isPast={item.iso < today}
+                              embedded
+                              {...click}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="px-4 py-3 border-t border-emerald-50">
+                <EmployeeMoneyFooter emp={emp} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
