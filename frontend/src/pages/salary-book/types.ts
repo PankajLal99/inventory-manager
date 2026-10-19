@@ -7,7 +7,7 @@ export interface Employee {
   address: string;
   blood_group: string;
   date_of_joining: string;
-  /** Joining day-of-month (1–31). Calendar strip is previous Nth → this Nth; next cycle starts the day after. */}
+  /** Joining day-of-month (1–31). Calendar strip is previous Nth → this Nth; next cycle starts the day after. */
   salary_cycle_start_day: number;
   designation: string;
   department: string;
