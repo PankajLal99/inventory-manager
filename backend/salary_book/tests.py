@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from io import BytesIO
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -157,6 +158,32 @@ class AuthTests(SalaryBookMixin, APITestCase):
         self.assertEqual(day1['minutes_early'], 60)
         missing = self.client.get(reverse('salary-book-calendar'), {'employee': 999999})
         self.assertEqual(missing.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_calendar_admin_rolls_open_cycle_after_payday(self):
+        emp = self.make_employee(
+            name='Cycle Worker',
+            employee_id='EMP-013',
+            date_of_joining=date(2025, 1, 13),
+            salary_cycle_start_day=13,
+        )
+        self.client.force_authenticate(user=self.allowed)
+        with mock.patch(
+            'backend.salary_book.views.timezone.localdate',
+            return_value=date(2026, 10, 19),
+        ):
+            res = self.client.get(
+                reverse('salary-book-calendar'),
+                {'year': 2026, 'month': 10},
+            )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        row = next(r for r in res.data['employees'] if r['id'] == emp.id)
+        self.assertEqual(row['period_start'], '2026-10-13')
+        self.assertEqual(row['period_end_marker'], '2026-11-13')
+        self.assertEqual(row['period_year'], 2026)
+        self.assertEqual(row['period_month'], 11)
+        self.assertIn('2026-10-13', row['cycle_days'])
+        self.assertIn('2026-11-13', row['cycle_days'])
+        self.assertNotIn('2026-09-13', row['cycle_days'])
 
     def test_dashboard_and_reports(self):
         emp = self.make_employee()

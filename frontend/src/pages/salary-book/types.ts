@@ -257,6 +257,8 @@ export interface CalendarEmployee {
   period_start?: string;
   period_end?: string;
   period_end_marker?: string;
+  period_year?: number;
+  period_month?: number;
   days: Record<string, CalendarDayCell>;
   cycle_days?: Record<string, CalendarDayCell>;
   counts: {

@@ -752,8 +752,8 @@ function buildCycleWindowList(
 
 /**
  * Days to show for one employee.
- * Prefer API cycle_days when bounds match period_start / period_end_marker;
- * otherwise rebuild so month changes still populate prior-cycle attendance.
+ * Trust API period_start / period_end_marker (open cycle after payday), not the
+ * page's calendar month — e.g. on 19 Oct a day-13 cycle is 13 Oct → 13 Nov.
  */
 function employeeCycleDayList(
   employee: CalendarEmployee,
@@ -766,62 +766,41 @@ function employeeCycleDayList(
   const periodStart = employee.period_start || null;
   const periodEndMarker = employee.period_end_marker || null;
 
-  const boundsMatchRequest = (() => {
-    if (!periodEndMarker || cycleDay <= 1) return true;
-    const [ey, em] = periodEndMarker.split('-').map(Number);
-    return ey === year && em === month;
-  })();
-
-  if (cycle && Object.keys(cycle).length > 0 && boundsMatchRequest) {
-    const list = Object.keys(cycle)
-      .sort()
-      .map((iso) => {
-        const [y, m, d] = iso.split('-').map(Number);
-        return { iso, y, m, d, cell: cycle[iso] };
-      });
-
-    if (cycleDay > 1 && periodStart && periodEndMarker) {
+  if (cycleDay > 1 && periodStart && periodEndMarker) {
+    if (cycle && Object.keys(cycle).length > 0) {
+      const list = Object.keys(cycle)
+        .sort()
+        .map((iso) => {
+          const [y, m, d] = iso.split('-').map(Number);
+          return { iso, y, m, d, cell: cycle[iso] };
+        });
       const first = list[0]?.iso;
       const last = list[list.length - 1]?.iso;
       const matchesBounds = first === periodStart && last === periodEndMarker;
       const tooShort = list.length < 27;
       if (matchesBounds && !tooShort) return list;
-      return buildCycleWindowList(
-        employee,
-        year,
-        month,
-        daysInMonth,
-        cycleDay,
-        periodStart,
-        periodEndMarker,
-      );
     }
-
-    if (cycleDay > 1) {
-      const last = list[list.length - 1];
-      const expectedEndD = Math.min(cycleDay, daysInMonth);
-      const endsOnMonthLast =
-        last && last.y === year && last.m === month && last.d === daysInMonth;
-      const endsOnCycleMarker =
-        last && last.y === year && last.m === month && last.d === expectedEndD;
-      const hasMarker = list.some((item) => item.cell?.is_cycle_end_marker);
-      const tooShort = list.length < 27;
-      if (tooShort || (endsOnMonthLast && !endsOnCycleMarker && !hasMarker)) {
-        return buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
-      }
-    }
-    return list;
+    return buildCycleWindowList(
+      employee,
+      year,
+      month,
+      daysInMonth,
+      cycleDay,
+      periodStart,
+      periodEndMarker,
+    );
   }
 
-  return buildCycleWindowList(
-    employee,
-    year,
-    month,
-    daysInMonth,
-    cycleDay,
-    boundsMatchRequest ? periodStart : null,
-    boundsMatchRequest ? periodEndMarker : null,
-  );
+  if (cycle && Object.keys(cycle).length > 0) {
+    return Object.keys(cycle)
+      .sort()
+      .map((iso) => {
+        const [y, m, d] = iso.split('-').map(Number);
+        return { iso, y, m, d, cell: cycle[iso] };
+      });
+  }
+
+  return buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
 }
 
 export function EmployeeMonthGrid({

@@ -1509,10 +1509,13 @@ def attendance_calendar(request):
         period_start, period_end = calendar_start, calendar_end
         period_end_marker = calendar_end
         range_start, range_end = calendar_start, calendar_end
-        # Pull enough days so each employee's cycle strip can render.
+        # Current calendar month → each person's *open* cycle (rolls the day
+        # after payday). Other year/month → payday-keyed strip for history.
+        use_open_cycle = (year, month) == (today.year, today.month)
         for emp in employees:
-            s, _ = cycle_range(emp, year, month)
-            em = cycle_end_marker(emp, year, month)
+            py, pm = period_containing(emp, today) if use_open_cycle else (year, month)
+            s, _ = cycle_range(emp, py, pm)
+            em = cycle_end_marker(emp, py, pm)
             if s < range_start:
                 range_start = s
             if em > range_end:
@@ -1545,12 +1548,20 @@ def attendance_calendar(request):
         counts = _status_counts()
         days = {}
         if view == 'admin':
-            emp_start, emp_end = cycle_range(emp, year, month)
+            use_open_cycle = (year, month) == (today.year, today.month)
+            period_year, period_month = (
+                period_containing(emp, today) if use_open_cycle else (year, month)
+            )
+            emp_start, emp_end = cycle_range(emp, period_year, period_month)
+            paid_start, paid_end = paid_cycle_range(emp, period_year, period_month)
+            emp_end_marker = cycle_end_marker(emp, period_year, period_month)
         else:
+            period_year, period_month = year, month
             emp_start, emp_end = period_start, period_end
-        paid_start, paid_end = paid_cycle_range(emp, year, month)
-        # Grid always shows the selected calendar month days; cycle days outside
-        # this month are still counted in salary but marked on the month grid.
+            paid_start, paid_end = paid_cycle_range(emp, year, month)
+            emp_end_marker = cycle_end_marker(emp, year, month)
+
+        # Calendar-month day map (employee month grid / legacy).
         for day in range(1, days_in_month + 1):
             cell_date = date(year, month, day)
             in_cycle = paid_start <= cell_date <= paid_end
@@ -1565,17 +1576,10 @@ def attendance_calendar(request):
                 cell = _calendar_day_cell(marked, emp, settings_obj)
                 cell['in_cycle'] = in_cycle
                 days[str(day)] = cell
-                if in_cycle or view == 'admin':
-                    counts[marked['status']] += 1
-                    team[marked['status']] += 1
             else:
                 days[str(day)] = {'status': None, 'in_cycle': in_cycle}
-                if in_cycle or view == 'admin':
-                    counts['unmarked'] += 1
-                    team['unmarked'] += 1
 
-        # Full UI cycle: joining day → next joining day (e.g. 13 Sep → 13 Oct = 31 days).
-        emp_end_marker = cycle_end_marker(emp, year, month)
+        # Full UI cycle strip + present/absent counts for that strip.
         cycle_days = {}
         cursor = emp_start
         while cursor <= emp_end_marker:
@@ -1600,15 +1604,21 @@ def attendance_calendar(request):
                     cell['in_cycle'] = in_salary_window
                     cell['is_cycle_end_marker'] = cursor == emp_end_marker
                     cycle_days[iso] = cell
+                    if in_salary_window or view == 'admin':
+                        counts[marked['status']] += 1
+                        team[marked['status']] += 1
                 else:
                     cycle_days[iso] = {
                         'status': None,
                         'in_cycle': in_salary_window,
                         'is_cycle_end_marker': cursor == emp_end_marker,
                     }
+                    if in_salary_window or view == 'admin':
+                        counts['unmarked'] += 1
+                        team['unmarked'] += 1
             cursor = cursor + timedelta(days=1)
 
-        record, _ = _upsert_draft(emp, year, month)
+        record, _ = _upsert_draft(emp, period_year, period_month)
         breakdown = record.breakdown if isinstance(record.breakdown, dict) else {}
         salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
         payload.append({
@@ -1620,6 +1630,8 @@ def attendance_calendar(request):
             'period_start': emp_start.isoformat(),
             'period_end': emp_end.isoformat(),
             'period_end_marker': emp_end_marker.isoformat(),
+            'period_year': period_year,
+            'period_month': period_month,
             'days': days,
             'cycle_days': cycle_days,
             'counts': counts,
