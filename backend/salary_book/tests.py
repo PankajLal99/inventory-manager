@@ -185,6 +185,48 @@ class AuthTests(SalaryBookMixin, APITestCase):
         self.assertIn('2026-11-13', row['cycle_days'])
         self.assertNotIn('2026-09-13', row['cycle_days'])
 
+    def test_joining_date_change_updates_calendar_cycle(self):
+        """Changing date_of_joining must realign cycle day and calendar strip."""
+        emp = self.make_employee(
+            name='Join Shift',
+            employee_id='EMP-JOIN',
+            date_of_joining=date(2025, 1, 13),
+            salary_cycle_start_day=13,
+        )
+        Attendance.objects.create(
+            employee=emp,
+            date=date(2026, 10, 10),
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(date(2026, 10, 10), 9, 0),
+            check_out_time=_local_dt(date(2026, 10, 10), 18, 0),
+        )
+        self.client.force_authenticate(user=self.allowed)
+        patch = self.client.patch(
+            reverse('salary-book-employee-detail', args=[emp.id]),
+            {'date_of_joining': '2026-10-16'},
+            format='json',
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch.data['date_of_joining'], '2026-10-16')
+        self.assertEqual(patch.data['salary_cycle_start_day'], 16)
+
+        with mock.patch(
+            'backend.salary_book.views.timezone.localdate',
+            return_value=date(2026, 10, 19),
+        ):
+            res = self.client.get(
+                reverse('salary-book-calendar'),
+                {'year': 2026, 'month': 10, 'employee': emp.id},
+            )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        row = res.data['employees'][0]
+        self.assertEqual(row['salary_cycle_start_day'], 16)
+        self.assertEqual(row['date_of_joining'], '2026-10-16')
+        self.assertEqual(row['period_start'], '2026-09-16')
+        self.assertEqual(row['period_end_marker'], '2026-10-16')
+        self.assertEqual(row['cycle_days']['2026-10-10']['status'], 'BEFORE_JOINING')
+        self.assertEqual(row['cycle_days']['2026-10-16']['status'], None)
+
     def test_dashboard_and_reports(self):
         emp = self.make_employee()
         other = self.make_employee(name='Sita Devi', employee_id='EMP-088')
@@ -295,6 +337,14 @@ class EmployeeTests(SalaryBookMixin, APITestCase):
         res = self.client.post(url, payload, format='json')
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertTrue(res.data['employee_id'].startswith('EMP-'))
+        self.assertEqual(res.data['salary_cycle_start_day'], 1)
+        mid = self.client.post(
+            url,
+            {**payload, 'name': 'Mid Month', 'mobile': '9876543211', 'date_of_joining': '2026-04-13'},
+            format='json',
+        )
+        self.assertEqual(mid.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(mid.data['salary_cycle_start_day'], 13)
         res2 = self.client.post(url, {**payload, 'employee_id': res.data['employee_id']}, format='json')
         self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
 

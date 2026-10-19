@@ -5,7 +5,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import { apiError, formatINR, formatDate, monthLabel, periodContaining, statusLabel, toTimeInput } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
 import ConfirmDialog from './components/ConfirmDialog';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
@@ -144,6 +144,7 @@ export default function EmployeeDetails() {
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
       {tab === 'attendance' && (
         <AttendanceHistory
+          key={`${empId}-${data.date_of_joining}-${data.salary_cycle_start_day || 1}`}
           employeeId={empId}
           employeeName={data.name}
           cycleDay={data.salary_cycle_start_day}
@@ -202,6 +203,11 @@ function AttendanceHistory({
   const open = useMemo(() => periodContaining(cycleDay), [cycleDay]);
   const [year, setYear] = useState(open.year);
   const [month, setMonth] = useState(open.month);
+  // When joining/cycle day changes, jump to the new open salary period.
+  useEffect(() => {
+    setYear(open.year);
+    setMonth(open.month);
+  }, [open.year, open.month]);
   const [confirmSettle, setConfirmSettle] = useState(false);
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],

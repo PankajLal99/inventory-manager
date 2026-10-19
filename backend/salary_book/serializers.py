@@ -295,6 +295,41 @@ class EmployeeSerializer(serializers.ModelSerializer):
                 )
         return attrs
 
+    @staticmethod
+    def _cycle_day_from_joining(join_date):
+        if not join_date:
+            return 1
+        return max(1, min(28, int(join_date.day)))
+
+    def create(self, validated_data):
+        if validated_data.get('date_of_joining') and 'salary_cycle_start_day' not in validated_data:
+            validated_data['salary_cycle_start_day'] = self._cycle_day_from_joining(
+                validated_data['date_of_joining']
+            )
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Calendar strip is keyed by salary_cycle_start_day. When joining date
+        # changes without an explicit cycle day, keep the payday aligned with
+        # the joining day-of-month — but only if cycle day was still following
+        # the previous joining day (don't override a custom calendar-month cycle).
+        if (
+            'date_of_joining' in validated_data
+            and 'salary_cycle_start_day' not in validated_data
+            and validated_data['date_of_joining'] is not None
+        ):
+            old_join = instance.date_of_joining
+            old_cycle = int(instance.salary_cycle_start_day or 1)
+            was_aligned = (
+                old_join is None
+                or old_cycle == self._cycle_day_from_joining(old_join)
+            )
+            if was_aligned:
+                validated_data['salary_cycle_start_day'] = self._cycle_day_from_joining(
+                    validated_data['date_of_joining']
+                )
+        return super().update(instance, validated_data)
+
 
 class AttendanceSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.name', read_only=True)

@@ -342,6 +342,80 @@ def rebuild_hardware_day(
         return 'updated'
 
 
+def _hardware_dates_for_employee(employee, settings_obj) -> set:
+    """Calendar dates that have device punches or hardware attendance for employee."""
+    from backend.salary_book.models import Attendance
+
+    mappings = list(
+        DeviceUserMapping.objects.filter(
+            employee_id=employee.employee_id,
+            is_active=True,
+        ).select_related('device')
+    )
+    dates: set = set()
+    if mappings:
+        query = Q()
+        for mapping in mappings:
+            query |= Q(device_id=mapping.device_id, device_user_id=mapping.device_user_id)
+        for event in AttendanceEvent.objects.filter(query).only('punch_datetime').iterator():
+            punch = settings_obj.apply_machine_time_delta(event.punch_datetime)
+            dates.add(timezone.localtime(punch).date())
+
+    for att_date in Attendance.objects.filter(
+        employee=employee,
+        attendance_method=Attendance.METHOD_HARDWARE,
+    ).values_list('date', flat=True):
+        dates.add(att_date)
+    return dates
+
+
+def resync_employee_after_joining_date_change(employee, previous_join) -> dict[str, int]:
+    """Rebuild salary-book days after date_of_joining changes.
+
+    Moving the join date earlier re-applies punches that were previously skipped.
+    Moving it later leaves pre-join rows in place; the calendar marks them
+    BEFORE_JOINING and salary math ignores them.
+    """
+    from backend.salary_book.models import SalaryBookSettings
+
+    stats = {
+        'scanned': 0,
+        'updated': 0,
+        'unchanged': 0,
+        'skipped_protected': 0,
+        'skipped_manual': 0,
+        'no_punches': 0,
+    }
+    settings_obj = SalaryBookSettings.get_solo()
+    if not _hardware_capture_mode(settings_obj):
+        return stats
+
+    new_join = employee.date_of_joining
+    if not new_join or previous_join == new_join:
+        return stats
+
+    dates = _hardware_dates_for_employee(employee, settings_obj)
+    # Always re-check the window covering both join dates so newly included
+    # (or newly excluded) days are rebuilt against the updated join rule.
+    start = min(previous_join, new_join) if previous_join else new_join
+    end = max(previous_join, new_join) if previous_join else new_join
+    cursor = start
+    while cursor <= end:
+        dates.add(cursor)
+        cursor = cursor + timedelta(days=1)
+
+    for att_date in sorted(dates):
+        stats['scanned'] += 1
+        result = rebuild_hardware_day(
+            employee,
+            att_date,
+            settings_obj,
+            hardware_only=True,
+        )
+        stats[result] = stats.get(result, 0) + 1
+    return stats
+
+
 def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
     """Re-pair every mapped hardware day from AttendanceEvent rows.
 
@@ -349,7 +423,7 @@ def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
     Leaves leave/holiday and non-hardware (manual/geo) rows alone.
     Dry-run uses the same rebuild path and rolls back each day.
     """
-    from backend.salary_book.models import Attendance, Employee, SalaryBookSettings
+    from backend.salary_book.models import Employee, SalaryBookSettings
 
     settings_obj = SalaryBookSettings.get_solo()
     stats = {
@@ -373,7 +447,7 @@ def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
     for mapping in mappings:
         by_employee.setdefault(mapping.employee_id, []).append(mapping)
 
-    for employee_id, emp_mappings in by_employee.items():
+    for employee_id in by_employee:
         employee = Employee.objects.filter(
             employee_id=employee_id,
             status=Employee.STATUS_ACTIVE,
@@ -381,22 +455,7 @@ def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
         if not employee:
             continue
 
-        query = Q()
-        for mapping in emp_mappings:
-            query |= Q(device_id=mapping.device_id, device_user_id=mapping.device_user_id)
-        events = AttendanceEvent.objects.filter(query).only('punch_datetime')
-        dates = set()
-        for event in events.iterator():
-            punch = settings_obj.apply_machine_time_delta(event.punch_datetime)
-            dates.add(timezone.localtime(punch).date())
-
-        # Also catch hardware rows that no longer match punches (e.g. inverted times).
-        for att_date in Attendance.objects.filter(
-            employee=employee,
-            attendance_method=Attendance.METHOD_HARDWARE,
-        ).values_list('date', flat=True):
-            dates.add(att_date)
-
+        dates = _hardware_dates_for_employee(employee, settings_obj)
         for att_date in sorted(dates):
             stats['scanned'] += 1
             result = rebuild_hardware_day(

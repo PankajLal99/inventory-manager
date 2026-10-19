@@ -102,7 +102,6 @@ export default function EmployeeList() {
                 <th className="px-4 py-3 font-medium">Employee</th>
                 <th className="px-4 py-3 font-medium">ID</th>
                 <th className="px-4 py-3 font-medium">Department</th>
-                <th className="px-4 py-3 font-medium">Salary</th>
                 <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
@@ -116,7 +115,6 @@ export default function EmployeeList() {
                   <td className="px-4 py-3 font-medium text-gray-900">{emp.name}</td>
                   <td className="px-4 py-3 text-gray-600">{emp.employee_id}</td>
                   <td className="px-4 py-3 text-gray-600">{emp.department || '—'}</td>
-                  <td className="px-4 py-3">{formatINR(emp.monthly_salary)}</td>
                   <td className={`px-4 py-3 ${emp.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
                     {emp.status === 'ACTIVE' ? 'Active' : 'Inactive'}
                   </td>

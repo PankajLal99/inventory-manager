@@ -1,4 +1,5 @@
 import calendar
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -24,6 +25,7 @@ from backend.salary_book.authentication import (
 from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 from .models import (
     Attendance,
@@ -336,6 +338,7 @@ def employee_detail(request, pk):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     old_name = employee.name
+    old_join = employee.date_of_joining
     employee = serializer.save()
     photo = maybe_compress(request.FILES, 'profile_photo')
     if photo:
@@ -345,6 +348,18 @@ def employee_detail(request, pk):
         from backend.attendance.services.commands import sync_employee_name_to_devices
 
         sync_employee_name_to_devices(employee.employee_id, employee.name)
+    if employee.date_of_joining != old_join:
+        from backend.attendance.services.attendance import (
+            resync_employee_after_joining_date_change,
+        )
+
+        try:
+            resync_employee_after_joining_date_change(employee, previous_join=old_join)
+        except Exception:
+            logger.exception(
+                'Failed to resync attendance after joining-date change employee=%s',
+                employee.employee_id,
+            )
     return Response(EmployeeSerializer(employee, context={'request': request}).data)
 
 
