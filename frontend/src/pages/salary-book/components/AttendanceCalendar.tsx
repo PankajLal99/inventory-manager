@@ -1266,7 +1266,6 @@ export function AdminMonthGrid({
                               day={item.d}
                               cell={item.cell}
                               isToday={false}
-                              isPast={item.iso < today}
                               embedded
                               {...click}
                             />
