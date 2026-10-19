@@ -228,10 +228,27 @@ def _hardware_capture_mode(settings_obj) -> bool:
     return mode == SalaryBookSettings.CAPTURE_HARDWARE
 
 
-def rebuild_hardware_day(employee, att_date, settings_obj, *, hardware_only: bool = False) -> str:
+def _same_punch(left, right) -> bool:
+    """Compare punch datetimes by instant (ignore tz wrapper / us noise)."""
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    return int(left.timestamp()) == int(right.timestamp())
+
+
+def rebuild_hardware_day(
+    employee,
+    att_date,
+    settings_obj,
+    *,
+    hardware_only: bool = False,
+    dry_run: bool = False,
+) -> str:
     """Rebuild one salary-book day from stored punches.
 
     Returns: 'updated' | 'unchanged' | 'skipped_protected' | 'skipped_manual' | 'no_punches'.
+    When ``dry_run`` is True, uses the same logic then rolls the transaction back.
     """
     from backend.salary_book.models import Attendance
     from backend.salary_book.services.attendance_evaluator import (
@@ -258,6 +275,8 @@ def rebuild_hardware_day(employee, att_date, settings_obj, *, hardware_only: boo
         )
 
         if attendance.status in PROTECTED_STATUSES:
+            if dry_run and created:
+                transaction.set_rollback(True)
             return 'skipped_protected'
 
         if (
@@ -267,7 +286,16 @@ def rebuild_hardware_day(employee, att_date, settings_obj, *, hardware_only: boo
         ):
             return 'skipped_manual'
 
-        before = (attendance.check_in_time, attendance.check_out_time, attendance.status)
+        before_in = attendance.check_in_time
+        before_out = attendance.check_out_time
+        before_meta = (
+            attendance.status,
+            attendance.minutes_late,
+            attendance.is_late,
+            attendance.worked_minutes,
+            attendance.payable_minutes,
+            attendance.attendance_method,
+        )
         evaluation = evaluate_check_in(
             employee, att_date, Attendance.STATUS_PRESENT, check_in
         )
@@ -292,9 +320,24 @@ def rebuild_hardware_day(employee, att_date, settings_obj, *, hardware_only: boo
                 attendance.status = Attendance.STATUS_PRESENT
             refresh_worked_minutes(attendance)
 
-        after = (attendance.check_in_time, attendance.check_out_time, attendance.status)
-        if before == after and not created:
+        times_same = _same_punch(before_in, attendance.check_in_time) and _same_punch(
+            before_out, attendance.check_out_time
+        )
+        after_meta = (
+            attendance.status,
+            attendance.minutes_late,
+            attendance.is_late,
+            attendance.worked_minutes,
+            attendance.payable_minutes,
+            attendance.attendance_method,
+        )
+        if not created and times_same and before_meta == after_meta:
             return 'unchanged'
+
+        if dry_run:
+            transaction.set_rollback(True)
+            return 'updated'
+
         attendance.save()
         return 'updated'
 
@@ -304,6 +347,7 @@ def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
 
     Fixes inverted check-in/out and double-scan check-outs left by older logic.
     Leaves leave/holiday and non-hardware (manual/geo) rows alone.
+    Dry-run uses the same rebuild path and rolls back each day.
     """
     from backend.salary_book.models import Attendance, Employee, SalaryBookSettings
 
@@ -355,31 +399,12 @@ def repair_hardware_attendance(*, dry_run: bool = False) -> dict[str, int]:
 
         for att_date in sorted(dates):
             stats['scanned'] += 1
-            if dry_run:
-                punches = _adjusted_day_punches(employee, att_date, settings_obj)
-                check_in, check_out = pair_day_punches(punches)
-                existing = Attendance.objects.filter(employee=employee, date=att_date).first()
-                if existing and existing.status in PROTECTED_STATUSES:
-                    stats['skipped_protected'] += 1
-                elif (
-                    existing
-                    and existing.attendance_method != Attendance.METHOD_HARDWARE
-                ):
-                    stats['skipped_manual'] += 1
-                elif check_in is None:
-                    stats['no_punches'] += 1
-                elif (
-                    existing
-                    and existing.check_in_time == check_in
-                    and existing.check_out_time == check_out
-                ):
-                    stats['unchanged'] += 1
-                else:
-                    stats['updated'] += 1
-                continue
-
             result = rebuild_hardware_day(
-                employee, att_date, settings_obj, hardware_only=True
+                employee,
+                att_date,
+                settings_obj,
+                hardware_only=True,
+                dry_run=dry_run,
             )
             stats[result] = stats.get(result, 0) + 1
 

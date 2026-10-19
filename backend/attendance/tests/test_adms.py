@@ -305,8 +305,17 @@ class BridgeTests(TestCase):
         att.check_in_time, att.check_out_time = att.check_out_time, att.check_in_time
         att.save(update_fields=['check_in_time', 'check_out_time'])
 
+        dry = repair_hardware_attendance(dry_run=True)
+        att.refresh_from_db()
+        # Dry-run must not write; times stay inverted.
+        self.assertEqual(timezone.localtime(att.check_in_time).hour, 12)
+        self.assertGreaterEqual(dry['updated'], 1)
+
         stats = repair_hardware_attendance(dry_run=False)
-        self.assertGreaterEqual(stats['updated'], 1)
+        self.assertEqual(stats['updated'], dry['updated'])
+        self.assertEqual(stats['unchanged'], dry['unchanged'])
+        self.assertEqual(stats['skipped_manual'], dry['skipped_manual'])
+        self.assertEqual(stats['no_punches'], dry['no_punches'])
         att.refresh_from_db()
         self.assertEqual(timezone.localtime(att.check_in_time).hour, 9)
         self.assertEqual(timezone.localtime(att.check_out_time).hour, 12)

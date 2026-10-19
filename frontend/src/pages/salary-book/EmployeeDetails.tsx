@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { apiError, formatINR, formatDate, periodContaining, statusLabel, toTimeInput } from './utils';
+import { apiError, formatINR, formatDate, monthLabel, periodContaining, statusLabel, toTimeInput } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useMemo, useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
@@ -143,13 +143,17 @@ export default function EmployeeDetails() {
       )}
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
       {tab === 'attendance' && (
-        <AttendanceHistory employeeId={empId} cycleDay={data.salary_cycle_start_day} />
+        <AttendanceHistory
+          employeeId={empId}
+          employeeName={data.name}
+          cycleDay={data.salary_cycle_start_day}
+        />
       )}
       {tab === 'leaves' && <LeaveHistory employeeId={empId} />}
       {tab === 'advances' && (
         <AdvanceHistory employeeId={empId} employeeName={data.name} />
       )}
-      {tab === 'salaries' && <SalaryHistory employeeId={empId} />}
+      {tab === 'salaries' && <SalaryHistory employeeId={empId} employeeName={data.name} />}
     </div>
   );
 }
@@ -187,18 +191,42 @@ function EmployeeRules({ employeeId }: { employeeId: number }) {
 
 function AttendanceHistory({
   employeeId,
+  employeeName,
   cycleDay,
 }: {
   employeeId: number;
+  employeeName: string;
   cycleDay?: number;
 }) {
+  const queryClient = useQueryClient();
   const open = useMemo(() => periodContaining(cycleDay), [cycleDay]);
   const [year, setYear] = useState(open.year);
   const [month, setMonth] = useState(open.month);
+  const [confirmSettle, setConfirmSettle] = useState(false);
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],
     queryFn: async () =>
       (await salaryBookApi.calendar({ year, month, employee: employeeId })).data as CalendarResponse,
+  });
+  const settle = useMutation({
+    mutationFn: async () =>
+      (await salaryBookApi.employees.settleMonth(employeeId, { year, month, payment_mode: 'CASH' })).data,
+    onSuccess: async (res) => {
+      setConfirmSettle(false);
+      if (res?.already_settled) {
+        toast(`${monthLabel(year, month)} is already settled`, 'success');
+      } else {
+        const adv = Number(res?.advances_marked_paid || 0);
+        toast(
+          adv > 0
+            ? `Settled ${monthLabel(year, month)} · ${adv} advance(s) cleared`
+            : `Settled ${monthLabel(year, month)}`,
+          'success',
+        );
+      }
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to settle this month.'), 'error'),
   });
   if (isLoading) return <LoadingState message="Loading attendance..." />;
   // Avoid rendering a prior month's strip under the newly selected year/month.
@@ -211,12 +239,21 @@ function AttendanceHistory({
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <MonthNav year={data.year} month={data.month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
-        <Link
-          to={`/salary-book/calendar?employee=${employeeId}&year=${data.year}&month=${data.month}`}
-          className="text-sm text-emerald-800 font-medium"
-        >
-          Open full calendar
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setConfirmSettle(true)}
+            className="inline-flex items-center justify-center min-h-11 px-4 rounded-xl bg-emerald-600 text-white text-sm font-semibold"
+          >
+            Settle {monthLabel(data.year, data.month)}
+          </button>
+          <Link
+            to={`/salary-book/calendar?employee=${employeeId}&year=${data.year}&month=${data.month}`}
+            className="text-sm text-emerald-800 font-medium"
+          >
+            Open full calendar
+          </Link>
+        </div>
       </div>
       <KpiStrip kpis={data.kpis} compact />
       <CalendarLegend />
@@ -226,6 +263,15 @@ function AttendanceHistory({
         daysInMonth={data.days_in_month}
         today={data.today}
         employee={emp}
+      />
+      <ConfirmDialog
+        open={confirmSettle}
+        title={`Settle ${monthLabel(year, month)}?`}
+        message={`This will clear active advances for ${employeeName}'s ${monthLabel(year, month)} cycle, pay any remaining salary, and finalize the month as settled.`}
+        confirmLabel="Settle"
+        loading={settle.isPending}
+        onCancel={() => setConfirmSettle(false)}
+        onConfirm={() => settle.mutate()}
       />
     </div>
   );
@@ -320,23 +366,91 @@ function AdvanceHistory({ employeeId, employeeName }: { employeeId: number; empl
   );
 }
 
-function SalaryHistory({ employeeId }: { employeeId: number }) {
+function SalaryHistory({
+  employeeId,
+  employeeName,
+}: {
+  employeeId: number;
+  employeeName: string;
+}) {
+  const queryClient = useQueryClient();
+  const [settleTarget, setSettleTarget] = useState<{ year: number; month: number } | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['salary-book', 'emp-sal', employeeId],
     queryFn: async () => (await salaryBookApi.employees.salaries(employeeId)).data as Paginated<SalaryRecord>,
+  });
+  const settle = useMutation({
+    mutationFn: async (target: { year: number; month: number }) =>
+      (
+        await salaryBookApi.employees.settleMonth(employeeId, {
+          year: target.year,
+          month: target.month,
+          payment_mode: 'CASH',
+        })
+      ).data,
+    onSuccess: async (res, target) => {
+      setSettleTarget(null);
+      if (res?.already_settled) {
+        toast(`${monthLabel(target.year, target.month)} is already settled`, 'success');
+      } else {
+        const adv = Number(res?.advances_marked_paid || 0);
+        toast(
+          adv > 0
+            ? `Settled ${monthLabel(target.year, target.month)} · ${adv} advance(s) cleared`
+            : `Settled ${monthLabel(target.year, target.month)}`,
+          'success',
+        );
+      }
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to settle this month.'), 'error'),
   });
   if (isLoading) return <LoadingState message="Loading salary history..." />;
   if (!data?.results.length) return <p className="text-sm text-gray-500">No salary records yet.</p>;
   return (
     <div className="space-y-2">
-      {data.results.map((row) => (
-        <Link key={row.id} to={`/salary-book/salaries/${row.id}`} className="block bg-white rounded-xl border border-gray-100 p-3">
-          <div className="font-medium">{row.month}/{row.year}</div>
-          <div className="text-sm text-gray-600">
-            Net {formatINR(row.net_salary)} · {statusLabel(row.payment_status)}
+      {data.results.map((row) => {
+        const settled = row.status === 'FINALIZED' && row.payment_status === 'PAID';
+        return (
+          <div
+            key={row.id}
+            className="bg-white rounded-xl border border-gray-100 p-3 flex flex-wrap items-center gap-3 justify-between"
+          >
+            <Link to={`/salary-book/salaries/${row.id}`} className="min-w-0 flex-1">
+              <div className="font-medium">{monthLabel(row.year, row.month)}</div>
+              <div className="text-sm text-gray-600">
+                Net {formatINR(row.net_salary)} · {statusLabel(row.payment_status)}
+                {row.status === 'FINALIZED' ? ' · Finalized' : ''}
+              </div>
+            </Link>
+            <button
+              type="button"
+              disabled={settled || settle.isPending}
+              onClick={() => setSettleTarget({ year: row.year, month: row.month })}
+              className={`shrink-0 min-h-10 px-3 rounded-xl text-sm font-semibold ${
+                settled
+                  ? 'bg-gray-100 text-gray-400 cursor-default'
+                  : 'bg-emerald-600 text-white'
+              }`}
+            >
+              {settled ? 'Settled' : 'Settle'}
+            </button>
           </div>
-        </Link>
-      ))}
+        );
+      })}
+      <ConfirmDialog
+        open={settleTarget !== null}
+        title={
+          settleTarget
+            ? `Settle ${monthLabel(settleTarget.year, settleTarget.month)}?`
+            : 'Settle month?'
+        }
+        message={`This will clear active advances for ${employeeName}'s cycle, pay any remaining salary, and finalize the month as settled.`}
+        confirmLabel="Settle"
+        loading={settle.isPending}
+        onCancel={() => setSettleTarget(null)}
+        onConfirm={() => settleTarget && settle.mutate(settleTarget)}
+      />
     </div>
   );
 }

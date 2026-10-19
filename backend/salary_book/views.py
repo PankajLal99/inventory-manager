@@ -586,6 +586,108 @@ def employee_salary_history(request, pk):
     return _paginate(qs, request, SalaryRecordSerializer)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def employee_settle_month(request, pk):
+    """
+    Settle one salary cycle for an employee:
+    - mark active advances in that cycle as paid (clears Taken)
+    - recalculate salary
+    - record payment for any remaining net
+    - finalize the month as PAID
+    """
+    employee = get_object_or_404(Employee, pk=pk)
+    data = request.data or {}
+    try:
+        year = int(data.get('year'))
+        month = int(data.get('month'))
+    except (TypeError, ValueError):
+        return _err('year and month are required.')
+    if month < 1 or month > 12:
+        return _err('Month must be between 1 and 12.')
+
+    mode = (data.get('payment_mode') or SalaryPayment.MODE_CASH).upper()
+    if mode not in dict(SalaryPayment.MODE_CHOICES):
+        return _err('Invalid payment mode.')
+
+    paid_start, paid_end = paid_cycle_range(employee, year, month)
+
+    with transaction.atomic():
+        record, _ = _upsert_draft(employee, year, month)
+        if record.status == SalaryRecord.STATUS_FINALIZED:
+            # Allow re-settling unpaid finalized months by reopening first.
+            if record.payment_status == SalaryRecord.PAY_PAID:
+                return Response({
+                    'already_settled': True,
+                    'salary': SalaryRecordSerializer(record, context={'request': request}).data,
+                    'advances_marked_paid': 0,
+                    'payment': None,
+                })
+            record.status = SalaryRecord.STATUS_DRAFT
+            record.finalized_by = None
+            record.finalized_at = None
+            record.save(update_fields=['status', 'finalized_by', 'finalized_at', 'updated_at'])
+
+        advances = list(
+            SalaryAdvance.objects.select_for_update().filter(
+                employee=employee,
+                status=SalaryAdvance.STATUS_ACTIVE,
+                date__gte=paid_start,
+                date__lte=paid_end,
+            )
+        )
+        advances_marked = 0
+        for advance in advances:
+            advance.status = SalaryAdvance.STATUS_PAID
+            advance.updated_by = request.user
+            note = f'Settled with salary {month:02d}/{year}'
+            advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + note
+            advance.save(update_fields=['status', 'updated_by', 'remarks', 'updated_at'])
+            advances_marked += 1
+
+        # Recalculate after advances are cleared from the deduction pool.
+        calc = calculate_employee_month(employee, year, month)
+        apply_calculation_to_record(record, calc)
+        record.save()
+        paid_so_far = refresh_payment_status(record)
+        record.refresh_from_db()
+
+        remaining = Decimal(str(record.net_salary)) - Decimal(str(paid_so_far))
+        payment = None
+        if remaining > 0:
+            payment = SalaryPayment.objects.create(
+                employee=employee,
+                salary_record=record,
+                payment_date=timezone.localdate(),
+                amount=remaining,
+                payment_mode=mode,
+                remarks=f'Settlement for {month:02d}/{year}',
+                created_by=request.user,
+            )
+            refresh_payment_status(record)
+            record.refresh_from_db()
+
+        record.status = SalaryRecord.STATUS_FINALIZED
+        record.finalized_by = request.user
+        record.finalized_at = timezone.now()
+        record.save(update_fields=['status', 'finalized_by', 'finalized_at', 'updated_at'])
+        refresh_payment_status(record)
+        record.refresh_from_db()
+
+    return Response({
+        'already_settled': False,
+        'salary': SalaryRecordSerializer(record, context={'request': request}).data,
+        'advances_marked_paid': advances_marked,
+        'payment': (
+            SalaryPaymentSerializer(payment, context={'request': request}).data
+            if payment
+            else None
+        ),
+        'period_start': paid_start.isoformat(),
+        'period_end': paid_end.isoformat(),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Attendance
 # ---------------------------------------------------------------------------

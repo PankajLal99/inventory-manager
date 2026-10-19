@@ -739,6 +739,53 @@ class SalaryRuleTests(SalaryBookMixin, APITestCase):
         calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
         self.assertEqual(calc['total_advances'], Decimal('3000.00'))
 
+    def test_settle_month_pays_and_clears_advances(self):
+        emp = self.make_employee(
+            name='Settle Emp',
+            employee_id='EMP-SET-1',
+            date_of_joining=date(2026, 1, 1),
+            salary_cycle_start_day=1,
+        )
+        SalaryAdvance.objects.create(
+            employee=emp,
+            date=date(2026, 4, 5),
+            amount=Decimal('1000.00'),
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        Attendance.objects.bulk_create([
+            Attendance(
+                employee=emp,
+                date=date(2026, 4, d),
+                status=Attendance.STATUS_PRESENT,
+                attendance_method=Attendance.METHOD_MANUAL,
+            )
+            for d in range(1, 31)
+        ])
+        res = self.client.post(
+            reverse('salary-book-employee-settle', args=[emp.id]),
+            {'year': 2026, 'month': 4, 'payment_mode': 'CASH'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertFalse(res.data['already_settled'])
+        self.assertEqual(res.data['advances_marked_paid'], 1)
+        self.assertIsNotNone(res.data['payment'])
+        record = SalaryRecord.objects.get(employee=emp, year=2026, month=4)
+        self.assertEqual(record.status, SalaryRecord.STATUS_FINALIZED)
+        self.assertEqual(record.payment_status, SalaryRecord.PAY_PAID)
+        self.assertEqual(record.total_advances, Decimal('0.00'))
+        adv = SalaryAdvance.objects.get(employee=emp, date=date(2026, 4, 5))
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_PAID)
+
+        again = self.client.post(
+            reverse('salary-book-employee-settle', args=[emp.id]),
+            {'year': 2026, 'month': 4},
+            format='json',
+        )
+        self.assertEqual(again.status_code, status.HTTP_200_OK)
+        self.assertTrue(again.data['already_settled'])
+
     def test_finalize_locks_and_reopen(self):
         Attendance.objects.bulk_create([self._att(d, Attendance.STATUS_PRESENT) for d in range(1, 31)])
         res = self.client.get(reverse('salary-book-salary-list'), {'year': 2026, 'month': 4})

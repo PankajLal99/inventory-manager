@@ -792,6 +792,10 @@ export const salaryBookApi = {
       api.post(`/salary-book/employees/${id}/advances/reset-opening/`, data, sb as any),
     salaries: (id: number, params?: any) =>
       api.get(`/salary-book/employees/${id}/salaries/`, { params, ...sb } as any),
+    settleMonth: (
+      id: number,
+      data: { year: number; month: number; payment_mode?: string },
+    ) => api.post(`/salary-book/employees/${id}/settle/`, data, sb as any),
     attendanceRules: {
       list: (id: number) =>
         api.get(`/salary-book/employees/${id}/attendance-rules/`, sb as any),

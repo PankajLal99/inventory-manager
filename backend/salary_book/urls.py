@@ -31,6 +31,11 @@ urlpatterns = [
     ),
     path('salary-book/employees/<int:pk>/salaries/', views.employee_salary_history, name='salary-book-employee-salaries'),
     path(
+        'salary-book/employees/<int:pk>/settle/',
+        views.employee_settle_month,
+        name='salary-book-employee-settle',
+    ),
+    path(
         'salary-book/employees/<int:pk>/attendance-rules/',
         views.employee_attendance_rule_list,
         name='salary-book-employee-attendance-rules',
