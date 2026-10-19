@@ -9,6 +9,17 @@ python manage.py migrate attendance
 python manage.py migrate salary_book
 ```
 
+`migrate attendance` runs a one-shot repair that rebuilds hardware check-in/out
+from stored ADMS punches (fixes inverted times and double-scan check-outs).
+Manual/geo days and leave/holiday rows are left alone.
+
+To re-run later without a migration:
+
+```bash
+python manage.py repair_hardware_attendance --dry-run
+python manage.py repair_hardware_attendance
+```
+
 Ensure `ATTENDANCE_AUTO_APPROVE_DEVICES` is **not** set (or `false`).
 
 ## 2. Nginx — expose `/iclock/` on the API host

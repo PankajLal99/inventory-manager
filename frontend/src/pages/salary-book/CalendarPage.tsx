@@ -71,6 +71,8 @@ export default function CalendarPage() {
       next.delete('month');
     } else {
       next.delete('employee');
+      next.delete('year');
+      next.delete('month');
     }
     setParams(next);
   };
@@ -264,7 +266,7 @@ export default function CalendarPage() {
           <p className="text-xs sm:text-sm lg:text-base text-gray-500 mt-1">
             {isEmployee
               ? 'Tap a day for details. Unmarked days can get in/out times.'
-              : 'Swipe days per employee, or open one for the month grid.'}
+              : 'Each month sits in its own row. Open an employee to change month.'}
           </p>
           {isEmployee && selectedEmployee?.period_start && selectedEmployee?.period_end_marker ? (
             <p className="text-xs sm:text-sm text-emerald-800 mt-1 font-medium">
@@ -295,7 +297,9 @@ export default function CalendarPage() {
               void employeesQuery.refetch();
             }}
           />
-          <MonthNav year={data.year} month={data.month} onChange={setMonth} />
+          {isEmployee ? (
+            <MonthNav year={data.year} month={data.month} onChange={setMonth} />
+          ) : null}
         </div>
       </div>
 

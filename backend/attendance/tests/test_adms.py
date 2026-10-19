@@ -250,6 +250,68 @@ class BridgeTests(TestCase):
             45 * 60,
         )
 
+    def test_double_scan_two_seconds_apart_keeps_earlier_check_in(self):
+        later = '1\t2026-10-19 13:00:18\t0\t1\t0\t0\t0\t0\t0\t0'
+        earlier = '1\t2026-10-19 13:00:16\t0\t1\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=later, content_type='text/plain')
+        self.client.post(url, data=earlier, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        local_in = timezone.localtime(att.check_in_time)
+        self.assertEqual(local_in.hour, 13)
+        self.assertEqual(local_in.minute, 0)
+        self.assertEqual(local_in.second, 16)
+        self.assertIsNone(att.check_out_time)
+        self.assertEqual(AttendanceEvent.objects.count(), 2)
+
+    def test_out_of_order_morning_punch_becomes_check_in(self):
+        afternoon = '1\t2026-10-19 12:59:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        morning = '1\t2026-10-19 09:30:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=afternoon, content_type='text/plain')
+        self.client.post(url, data=morning, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        local_in = timezone.localtime(att.check_in_time)
+        local_out = timezone.localtime(att.check_out_time)
+        self.assertEqual((local_in.hour, local_in.minute), (9, 30))
+        self.assertEqual((local_out.hour, local_out.minute), (12, 59))
+        self.assertGreater(att.check_out_time, att.check_in_time)
+
+    def test_duplicate_upload_repairs_inverted_times(self):
+        morning = '1\t2026-10-19 09:30:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        afternoon = '1\t2026-10-19 12:59:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=morning, content_type='text/plain')
+        self.client.post(url, data=afternoon, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        # Simulate the bad row: later time stored as in, earlier as out.
+        att.check_in_time, att.check_out_time = att.check_out_time, att.check_in_time
+        att.save(update_fields=['check_in_time', 'check_out_time'])
+        self.client.post(url, data=morning, content_type='text/plain')
+        att.refresh_from_db()
+        self.assertEqual(timezone.localtime(att.check_in_time).hour, 9)
+        self.assertEqual(timezone.localtime(att.check_out_time).hour, 12)
+        self.assertGreater(att.check_out_time, att.check_in_time)
+
+    def test_repair_command_fixes_inverted_past_rows(self):
+        from backend.attendance.services.attendance import repair_hardware_attendance
+
+        morning = '1\t2026-10-19 09:30:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        afternoon = '1\t2026-10-19 12:59:00\t0\t1\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=morning, content_type='text/plain')
+        self.client.post(url, data=afternoon, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        att.check_in_time, att.check_out_time = att.check_out_time, att.check_in_time
+        att.save(update_fields=['check_in_time', 'check_out_time'])
+
+        stats = repair_hardware_attendance(dry_run=False)
+        self.assertGreaterEqual(stats['updated'], 1)
+        att.refresh_from_db()
+        self.assertEqual(timezone.localtime(att.check_in_time).hour, 9)
+        self.assertEqual(timezone.localtime(att.check_out_time).hour, 12)
+        self.assertGreater(att.check_out_time, att.check_in_time)
+
     def test_early_punch_then_valid_check_out(self):
         line1 = '1\t2026-09-17 13:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
         line2 = '1\t2026-09-17 13:02:00\t0\t2\t0\t0\t0\t0\t0\t0'
