@@ -1216,9 +1216,6 @@ export function AdminMonthGrid({
                               }`}
                             >
                               {item.d}/{item.m}
-                              <span className="ml-1 text-[10px] font-medium opacity-80">
-                                {weekdayShort(item.y, item.m, item.d)}
-                              </span>
                             </div>
                             <DayStatusCell
                               year={item.y}
