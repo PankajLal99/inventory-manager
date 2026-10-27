@@ -22,6 +22,7 @@ import ManualAttendanceDialog, {
 } from './components/ManualAttendanceDialog';
 import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
 import TakenHistoryByDate from './components/TakenHistoryByDate';
+import SalaryInvoice from './components/SalaryInvoice';
 import SalarySlipCard from './components/SalarySlipCard';
 import { apiError, cyclePeriodLabel, periodContaining, toTimeInput } from './utils';
 
@@ -142,6 +143,11 @@ export default function CalendarPage() {
   const selectedEmployeeDetails = useMemo(
     () => employeesQuery.data?.results.find((e) => e.id === manualTarget?.employeeId),
     [employeesQuery.data, manualTarget?.employeeId]
+  );
+
+  const selectedProfile = useMemo(
+    () => (employeeId ? employeesQuery.data?.results.find((e) => e.id === employeeId) : undefined),
+    [employeesQuery.data, employeeId],
   );
 
   const invalidateCalendar = async () => {
@@ -393,7 +399,11 @@ export default function CalendarPage() {
                 </div>
               </div>
             </div>
-            <SalarySlipCard employee={selectedEmployee} today={data.today} />
+            {selectedProfile ? (
+              <SalaryInvoice profile={selectedProfile} employee={selectedEmployee} today={data.today} />
+            ) : (
+              <SalarySlipCard employee={selectedEmployee} today={data.today} />
+            )}
             <TakenHistoryByDate
               employeeId={selectedEmployee.id}
               employeeName={selectedEmployee.name}
