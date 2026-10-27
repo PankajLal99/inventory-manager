@@ -381,16 +381,16 @@ export default function CalendarPage() {
               employee={selectedEmployee}
               onDayClick={openManual}
             />
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
-                <div className="text-xs text-emerald-800/80">Salary Generated</div>
-                <div className="text-sm font-semibold text-emerald-950 tabular-nums">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-3 sm:px-4 sm:py-4">
+                <div className="text-xs sm:text-sm font-medium text-emerald-800">Salary Generated</div>
+                <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none text-emerald-950">
                   ₹{Number(selectedEmployee.salary_generated || 0).toLocaleString('en-IN')}
                 </div>
               </div>
-              <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-2">
-                <div className="text-xs text-sky-800/80">Taken</div>
-                <div className="text-sm font-semibold text-sky-950 tabular-nums">
+              <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-3 sm:px-4 sm:py-4">
+                <div className="text-xs sm:text-sm font-medium text-sky-800">Taken</div>
+                <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none text-sky-950">
                   ₹{Number(selectedEmployee.taken || 0).toLocaleString('en-IN')}
                 </div>
               </div>
