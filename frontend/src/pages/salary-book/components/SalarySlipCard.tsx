@@ -39,9 +39,9 @@ function cycleSummary(employee: CalendarEmployee, today: string) {
 
 function Stat({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
-    <div className={`rounded-xl border px-3 py-2 min-w-[5.5rem] ${tone}`}>
-      <div className="text-[10px] uppercase tracking-wide opacity-80">{label}</div>
-      <div className="text-lg font-semibold tabular-nums leading-tight">{value}</div>
+    <div className={`rounded-xl border px-3 py-3 sm:px-4 sm:py-4 min-w-0 ${tone}`}>
+      <div className="text-xs sm:text-sm font-medium leading-tight">{label}</div>
+      <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">{value}</div>
     </div>
   );
 }
@@ -59,7 +59,7 @@ export default function SalarySlipCard({
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2 sm:gap-3">
         <Stat label="Total days" value={String(summary.total)} tone="bg-white border-gray-200 text-gray-900" />
         <Stat label="Present" value={String(summary.present)} tone="bg-emerald-50 border-emerald-100 text-emerald-900" />
         <Stat label="Half day" value={String(summary.half)} tone="bg-amber-50 border-amber-100 text-amber-950" />

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Briefcase, ChevronLeft, ChevronRight, Plus, RefreshCw, Umbrella, Wallet } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { formatINR, monthLabel, statusLabel } from '../utils';
+import { formatINR, formatTime12, monthLabel, statusLabel } from '../utils';
 import type { CalendarEmployee, CalendarKpis, CalendarTodayKpis, CalendarDayCell } from '../types';
 
 export const STATUS_STYLE: Record<string, { bg: string; text: string; short: string }> = {
@@ -26,20 +26,12 @@ function weekdayShort(year: number, month: number, day: number) {
   return WEEKDAY_SHORT[new Date(year, month - 1, day).getDay()];
 }
 
-/** Compact 24h HH:MM so afternoon punches are not confused with morning (13:15 vs 1:15). */
-function formatTime24(iso: string | null | undefined) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 function cellTitle(cell: CalendarDayCell | undefined, iso: string) {
   if (!cell?.status || cell.status === 'BEFORE_JOINING') return iso;
   return [
     statusLabel(cell.status),
-    cell.check_in_time ? `In ${formatTime24(cell.check_in_time)}` : '',
-    cell.check_out_time ? `Out ${formatTime24(cell.check_out_time)}` : '',
+    cell.check_in_time ? `In ${formatTime12(cell.check_in_time)}` : '',
+    cell.check_out_time ? `Out ${formatTime12(cell.check_out_time)}` : '',
     cell.is_late && cell.minutes_late ? `Late ${cell.minutes_late}m` : '',
     cell.is_early && cell.minutes_early ? `Early out ${cell.minutes_early}m` : '',
     cell.rule_penalty_applied ? 'Penalty' : '',
@@ -306,12 +298,12 @@ function InOutSplitCell({
       <div className={`flex h-full w-full flex-col overflow-hidden min-h-[3.25rem] ${round} ${todayRing}`}>
         <div className={`flex flex-1 items-center justify-center px-0.5 py-0.5 ${inBg}`}>
           <span className="text-[10px] font-semibold leading-none tabular-nums">
-            {formatTime24(cell.check_in_time) || '—'}
+            {formatTime12(cell.check_in_time) || '—'}
           </span>
         </div>
         <div className={`flex flex-1 items-center justify-center px-0.5 py-0.5 ${outBg}`}>
           <span className="text-[10px] font-semibold leading-none tabular-nums">
-            {formatTime24(cell.check_out_time) || '—'}
+            {formatTime12(cell.check_out_time) || '—'}
           </span>
         </div>
       </div>
@@ -323,13 +315,13 @@ function InOutSplitCell({
       <div className={`flex flex-1 flex-col items-center justify-center px-1 py-1.5 ${inBg}`}>
         <span className="text-[10px] font-semibold uppercase leading-none tracking-wide opacity-90">IN</span>
         <span className="mt-1 text-sm font-semibold leading-none tabular-nums">
-          {formatTime24(cell.check_in_time) || '—'}
+          {formatTime12(cell.check_in_time) || '—'}
         </span>
       </div>
       <div className={`flex flex-1 flex-col items-center justify-center px-1 py-1.5 ${outBg}`}>
         <span className="text-[10px] font-semibold uppercase leading-none tracking-wide opacity-90">OUT</span>
         <span className="mt-1 text-sm font-semibold leading-none tabular-nums">
-          {formatTime24(cell.check_out_time) || '—'}
+          {formatTime12(cell.check_out_time) || '—'}
         </span>
       </div>
     </div>
@@ -531,8 +523,8 @@ function MobileDayChip({
     sub = style?.short || '';
   }
 
-  const inTime = formatTime24(cell?.check_in_time);
-  const outTime = formatTime24(cell?.check_out_time);
+  const inTime = formatTime12(cell?.check_in_time);
+  const outTime = formatTime12(cell?.check_out_time);
   const showTimes = Boolean(inTime || outTime);
 
   return (
@@ -629,7 +621,7 @@ function SelectedDayPanel({
           <div className="rounded-lg bg-white border border-emerald-100 px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">In</div>
             <div className="text-base font-semibold tabular-nums text-gray-900">
-              {cell.check_in_time ? formatTime24(cell.check_in_time) : '—'}
+              {cell.check_in_time ? formatTime12(cell.check_in_time) : '—'}
             </div>
             {cell.is_late && cell.minutes_late ? (
               <div className="text-[11px] text-amber-700 font-medium">Late {cell.minutes_late}m</div>
@@ -639,7 +631,7 @@ function SelectedDayPanel({
             <div className="rounded-lg bg-white border border-emerald-100 px-3 py-2">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Out</div>
               <div className="text-base font-semibold tabular-nums text-gray-900">
-                {cell.check_out_time ? formatTime24(cell.check_out_time) : '—'}
+                {cell.check_out_time ? formatTime12(cell.check_out_time) : '—'}
               </div>
               {cell.is_early && cell.minutes_early ? (
                 <div className="text-[11px] text-orange-700 font-medium">Early {cell.minutes_early}m</div>
@@ -1000,8 +992,8 @@ function AdminStripDay({
   const status = cell?.status;
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const inTime = formatTime24(cell?.check_in_time);
-  const outTime = formatTime24(cell?.check_out_time);
+  const inTime = formatTime12(cell?.check_in_time);
+  const outTime = formatTime12(cell?.check_out_time);
   const hasPunches = Boolean(inTime || outTime);
 
   const lateIn = Boolean(cell?.is_late);

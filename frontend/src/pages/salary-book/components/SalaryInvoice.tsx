@@ -237,10 +237,10 @@ function InfoCell({
 
 function SummaryCell({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone: string }) {
   return (
-    <div className={`rounded-xl border px-2.5 py-2 text-center shrink-0 min-w-[5.25rem] ${tone}`}>
-      <div className="text-[10px] leading-snug text-gray-600">{label}</div>
-      <div className="text-lg font-bold tabular-nums leading-snug text-gray-900">{value}</div>
-      {hint ? <div className="text-[9px] leading-snug text-gray-500">{hint}</div> : null}
+    <div className={`rounded-xl border px-3 py-3 sm:px-4 sm:py-4 min-w-0 ${tone}`}>
+      <div className="text-xs sm:text-sm font-medium leading-tight text-gray-700">{label}</div>
+      <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none text-gray-900">{value}</div>
+      {hint ? <div className="mt-1 text-[11px] leading-snug text-gray-500">{hint}</div> : null}
     </div>
   );
 }
@@ -479,7 +479,7 @@ export default function SalaryInvoice({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 pb-1" data-slip-scroll>
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2 sm:gap-3">
           <SummaryCell label="Total days" value={String(days.length)} tone="bg-slate-50 border-slate-200" />
           <SummaryCell label="Present" value={String(present)} tone="bg-emerald-50 border-emerald-100" />
           <SummaryCell label="Half day" value={String(half)} tone="bg-amber-50 border-amber-100" />
