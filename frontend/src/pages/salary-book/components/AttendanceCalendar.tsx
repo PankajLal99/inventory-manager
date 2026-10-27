@@ -461,7 +461,7 @@ function MobileDayChip({
 
   if (sunday && !marked) {
     bg = 'bg-rose-50 text-rose-600';
-    sub = 'Off';
+    sub = 'Sunday';
   } else if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
     if (status === 'HALF_DAY' || cell?.is_late) {
       bg = 'bg-amber-400 text-amber-950';
@@ -992,7 +992,7 @@ function AdminStripDay({
   } else if (sunday && !marked) {
     body = (
       <div className="flex flex-1 items-center justify-center bg-rose-50 px-0.5 py-1.5">
-        <span className="text-[10px] font-semibold text-rose-600">Off</span>
+        <span className="text-[10px] font-semibold text-rose-600">Sunday</span>
       </div>
     );
   } else if (status && status !== 'BEFORE_JOINING') {
