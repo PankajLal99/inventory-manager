@@ -273,7 +273,7 @@ export default function CalendarPage() {
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
             {isEmployee
               ? 'Tap a day for details. Unmarked days can get in/out times.'
-              : 'Status per day. Open an employee for in/out times, or tap a cell to mark.'}
+              : 'Each day shows in/out times. Tap a cell to mark or correct.'}
           </p>
           {isEmployee && selectedEmployee?.period_start && selectedEmployee?.period_end_marker ? (
             <p className="text-xs sm:text-sm text-emerald-800 mt-1 font-medium">

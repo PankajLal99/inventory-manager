@@ -316,7 +316,6 @@ function DayStatusCell({
   isPast,
   compact,
   embedded,
-  statusOnly,
   clickable,
   onClick,
 }: {
@@ -328,7 +327,6 @@ function DayStatusCell({
   isPast?: boolean;
   compact?: boolean;
   embedded?: boolean;
-  statusOnly?: boolean;
   clickable?: boolean;
   onClick?: () => void;
 }) {
@@ -377,7 +375,7 @@ function DayStatusCell({
     );
   }
 
-  if (!statusOnly && hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
+  if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
     return wrap(
       <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} embedded={embedded} />,
       interactive ? 'ring-1 ring-dashed ring-emerald-300' : ''
@@ -402,21 +400,6 @@ function DayStatusCell({
         <span className={`leading-none ${compact ? 'text-[10px] font-medium' : 'text-xs font-medium'}`}>
           {interactive ? (isPast ? 'Mark' : 'Add') : '—'}
         </span>
-      </div>
-    );
-  }
-
-  if (statusOnly && hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY')) {
-    const lateIn = Boolean(cell?.is_late);
-    const style = lateIn || status === 'HALF_DAY' ? STATUS_STYLE.HALF_DAY : STATUS_STYLE.PRESENT;
-    return wrap(
-      <div
-        className={`flex h-full w-full flex-col items-center justify-center ${minH} ${round} ${style.bg} ${style.text} ${
-          todayRing ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
-        }`}
-      >
-        <span className={`font-bold leading-none ${compact ? 'text-sm' : 'text-base'}`}>{style.short}</span>
-        {lateIn ? <span className="mt-0.5 text-[9px] font-medium leading-none">L</span> : null}
       </div>
     );
   }
@@ -975,22 +958,45 @@ function AdminStripDay({
   const status = cell?.status;
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const inTime = formatTime12(cell?.check_in_time);
+  const outTime = formatTime12(cell?.check_out_time);
+  const hasPunches = Boolean(inTime || outTime);
+
   const lateIn = Boolean(cell?.is_late);
+  const earlyOut = Boolean(cell?.is_early && cell?.check_out_time);
+  const inBg = lateIn ? 'bg-amber-400 text-amber-950' : 'bg-emerald-500 text-white';
+  const outBg = !cell?.check_out_time
+    ? 'bg-slate-400 text-white'
+    : earlyOut
+      ? 'bg-orange-500 text-white'
+      : 'bg-sky-600 text-white';
 
   let dateTone = 'bg-slate-50 text-slate-600 border-b border-slate-200';
   if (sunday) dateTone = 'bg-rose-50 text-rose-700 border-b border-rose-100';
   else if (isToday) dateTone = 'bg-emerald-50 text-emerald-900 border-b border-emerald-100';
 
   let body: ReactNode;
-  if (sunday && !marked) {
+  if (hasPunches && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
+    body = (
+      <div className="flex w-full flex-1 flex-col">
+        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${inBg}`}>
+          <span className="text-[10px] font-semibold leading-none tabular-nums">{inTime || '—'}</span>
+        </div>
+        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${outBg}`}>
+          <span className="text-[10px] font-semibold leading-none tabular-nums">
+            {isFuture ? '—' : outTime || (isToday && !outTime ? '…' : '—')}
+          </span>
+        </div>
+      </div>
+    );
+  } else if (sunday && !marked) {
     body = (
       <div className="flex flex-1 items-center justify-center bg-rose-50 px-0.5 py-1.5">
         <span className="text-[10px] font-semibold text-rose-600">Off</span>
       </div>
     );
   } else if (status && status !== 'BEFORE_JOINING') {
-    const style =
-      lateIn && status === 'PRESENT' ? STATUS_STYLE.HALF_DAY : STATUS_STYLE[status] || STATUS_STYLE.UNMARKED;
+    const style = STATUS_STYLE[status] || STATUS_STYLE.UNMARKED;
     body = (
       <div className={`flex flex-1 flex-col items-center justify-center px-0.5 py-1.5 ${style.bg} ${style.text}`}>
         <span className="text-xs font-bold leading-none">{style.short}</span>
@@ -1013,12 +1019,12 @@ function AdminStripDay({
 
   const box = (
     <div
-      className={`flex h-[3.5rem] w-full flex-col overflow-hidden rounded-md border ${
+      className={`flex h-[4.25rem] w-full flex-col overflow-hidden rounded-md border ${
         sunday ? 'border-rose-200' : isToday ? 'border-emerald-600' : 'border-slate-200'
       } ${isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''} ${isFuture ? 'opacity-45' : ''}`}
     >
       <div className={`shrink-0 py-0.5 text-center text-[10px] font-bold tabular-nums leading-none ${dateTone}`}>
-        {day}
+        {day}/{month}
       </div>
       {body}
     </div>
@@ -1133,7 +1139,7 @@ export function AdminMonthGrid({
       {/* Mobile: compact status squares */}
       <div className="lg:hidden space-y-3">
         <p className="text-[11px] text-slate-500 px-0.5">
-          Colored letter = status. Dashed = unmarked. Tap a day to mark or correct.
+          Each box is day/month. Green = in · Blue = out. Tap a day to mark or correct.
         </p>
         {employees.map((emp) => {
           const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
@@ -1150,7 +1156,7 @@ export function AdminMonthGrid({
                       {group.items.map((item) => {
                         const click = dayClickProps(emp, item.iso, item.cell);
                         return (
-                          <div key={item.iso} className="w-[2.75rem]">
+                          <div key={item.iso} className="w-[4.5rem]">
                             <AdminStripDay
                               year={item.y}
                               month={item.m}
@@ -1177,7 +1183,7 @@ export function AdminMonthGrid({
       {/* Desktop: compact status cells, months wrap as rows */}
       <div className="hidden lg:block space-y-4">
         <p className="text-xs text-slate-500 px-0.5">
-          Status letter per day. Open an employee for in/out times. Tap a cell to mark or correct.
+          Green = in · Blue = out. Months wrap as rows. Tap a cell to mark or correct.
         </p>
         {employees.map((emp) => {
           const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
@@ -1197,7 +1203,7 @@ export function AdminMonthGrid({
                         return (
                           <div
                             key={item.iso}
-                            className={`w-[3.25rem] overflow-hidden rounded-lg border ${
+                            className={`w-[5.75rem] overflow-hidden rounded-lg border ${
                               sunday
                                 ? 'border-rose-300'
                                 : item.iso === today
@@ -1216,6 +1222,9 @@ export function AdminMonthGrid({
                               }`}
                             >
                               {item.d}/{item.m}
+                              <span className="ml-1 text-[10px] font-medium opacity-80">
+                                {weekdayShort(item.y, item.m, item.d)}
+                              </span>
                             </div>
                             <DayStatusCell
                               year={item.y}
@@ -1223,9 +1232,7 @@ export function AdminMonthGrid({
                               day={item.d}
                               cell={item.cell}
                               isToday={false}
-                              compact
                               embedded
-                              statusOnly
                               {...click}
                             />
                           </div>
