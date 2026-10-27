@@ -6,6 +6,7 @@ import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
+import { PageHeader } from './ui';
 import { downloadCsv, formatDate, formatINR, formatTime, monthLabel, statusLabel } from './utils';
 import type { Attendance, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 
@@ -18,7 +19,7 @@ const KINDS = [
 
 export default function ReportsPage() {
   const now = new Date();
-  const [kind, setKind] = useState<(typeof KINDS)[number]['id'] | ''>('');
+  const [kind, setKind] = useState<(typeof KINDS)[number]['id'] | ''>('attendance');
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [employee, setEmployee] = useState('');
@@ -117,15 +118,15 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-4" data-tutorial="reports-page">
-      <h1 className="text-xl lg:text-2xl font-bold">Reports</h1>
+      <PageHeader title="Reports" subtitle="Attendance, leave, advance, and monthly salary exports." />
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-2">
         {KINDS.map((k) => (
           <button
             key={k.id}
             type="button"
             onClick={() => setKind(k.id)}
-            className={`min-h-12 rounded-xl border text-left px-4 ${
-              kind === k.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-emerald-100'
+            className={`min-h-12 rounded-xl border text-left px-4 text-sm font-medium ${
+              kind === k.id ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-white border-slate-200 hover:bg-slate-50'
             }`}
           >
             {k.label}
@@ -133,7 +134,7 @@ export default function ReportsPage() {
         ))}
         <Link
           to="/salary-book/employees"
-          className="min-h-12 rounded-xl border bg-white border-emerald-100 flex items-center px-4"
+          className="min-h-12 rounded-xl border bg-white border-slate-200 flex items-center px-4 text-sm hover:bg-slate-50"
         >
           Employee Salary History
         </Link>

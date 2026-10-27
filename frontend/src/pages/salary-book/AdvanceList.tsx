@@ -5,8 +5,8 @@ import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
-import Button from '../../components/ui/Button';
 import Select from '../../components/ui/Select';
+import { PageHeader, SalaryButton, SalaryTable, SalaryTd } from './ui';
 import Input from '../../components/ui/Input';
 import Textarea from '../../components/ui/Textarea';
 import { toast } from '../../lib/toast';
@@ -80,19 +80,15 @@ export default function AdvanceList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Advances</h1>
-        <Button
-          data-tutorial="adv-add"
-          className="min-h-11 bg-emerald-600 hover:bg-emerald-700"
-          onClick={() => setOpen(true)}
-        >
-          Add Advance
-        </Button>
-      </div>
-      <p className="text-sm text-gray-600">
-        One row per employee. Tap to open their ledger and mark paid or void individual entries.
-      </p>
+      <PageHeader
+        title="Advances"
+        subtitle="One row per employee. Tap to open their ledger and mark paid or void individual entries."
+        actions={
+          <SalaryButton data-tutorial="adv-add" onClick={() => setOpen(true)}>
+            Add advance
+          </SalaryButton>
+        }
+      />
       {listQuery.isLoading && <LoadingState message="Loading advances..." />}
       {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
       {!listQuery.isLoading && groups.length === 0 && (
@@ -104,7 +100,7 @@ export default function AdvanceList() {
             key={group.employeeId}
             type="button"
             onClick={() => openLedger(group)}
-            className="w-full bg-white rounded-xl border border-emerald-100 p-4 flex items-center justify-between gap-3 text-left active:bg-emerald-50/40"
+            className="w-full bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3 text-left active:bg-slate-50"
           >
             <div className="min-w-0">
               <div className="font-semibold text-emerald-800">{group.employeeName}</div>
@@ -123,39 +119,30 @@ export default function AdvanceList() {
         ))}
       </div>
       {groups.length > 0 && (
-        <div className="hidden lg:block bg-white rounded-xl border border-emerald-100 overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-emerald-50 text-left text-gray-600">
-              <tr>
-                <th className="px-4 py-3 font-medium">Employee</th>
-                <th className="px-4 py-3 font-medium">Outstanding</th>
-                <th className="px-4 py-3 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((group) => (
-                <tr
-                  key={group.employeeId}
-                  className="border-t border-emerald-50 cursor-pointer hover:bg-emerald-50/40"
-                  onClick={() => openLedger(group)}
-                >
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-emerald-800">{group.employeeName}</div>
-                    {group.employeeCode ? (
-                      <div className="text-xs text-gray-400">{group.employeeCode}</div>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 font-semibold tabular-nums">
-                    {formatINR(group.outstanding.toFixed(2))}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-400">
-                    <ChevronRight className="inline h-4 w-4" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SalaryTable
+          columns={[
+            { key: 'emp', label: 'Employee' },
+            { key: 'out', label: 'Outstanding', align: 'right' },
+            { key: 'act', label: '' },
+          ]}
+        >
+          {groups.map((group) => (
+            <tr
+              key={group.employeeId}
+              className="cursor-pointer hover:bg-slate-50"
+              onClick={() => openLedger(group)}
+            >
+              <SalaryTd>
+                <div className="font-medium text-slate-900">{group.employeeName}</div>
+                {group.employeeCode ? <div className="text-xs text-slate-400">{group.employeeCode}</div> : null}
+              </SalaryTd>
+              <SalaryTd align="right">{formatINR(group.outstanding.toFixed(2))}</SalaryTd>
+              <SalaryTd className="text-right text-slate-400">
+                <ChevronRight className="inline h-4 w-4" />
+              </SalaryTd>
+            </tr>
+          ))}
+        </SalaryTable>
       )}
 
       {open && (
@@ -215,8 +202,8 @@ function AdvanceForm({
         <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
         <Textarea label="Remarks" rows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
         <div className="grid grid-cols-2 gap-3">
-          <Button type="button" variant="outline" className="min-h-12" onClick={onClose}>Cancel</Button>
-          <Button type="submit" className="min-h-12 bg-emerald-600 hover:bg-emerald-700" loading={loading}>Save</Button>
+          <SalaryButton type="button" variant="secondary" size="lg" onClick={onClose}>Cancel</SalaryButton>
+          <SalaryButton type="submit" size="lg" loading={loading}>Save</SalaryButton>
         </div>
       </form>
     </SalaryBookSheet>

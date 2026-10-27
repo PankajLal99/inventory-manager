@@ -6,6 +6,8 @@ import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import ConfirmDialog from './components/ConfirmDialog';
+import { PageHeader } from './ui';
 import { toast } from '../../lib/toast';
 import {
   apiError,
@@ -48,6 +50,7 @@ export default function AttendancePage() {
   const [status, setStatus] = useState<(typeof STATUSES)[number]['value']>('PRESENT');
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [attendanceDate, setAttendanceDate] = useState(todayISO());
   const date = attendanceDate;
@@ -303,10 +306,11 @@ export default function AttendancePage() {
   return (
     <div className="space-y-4" data-tutorial="att-page">
       <div>
-        <div className="flex items-start justify-between gap-3">
-          <h1 className="text-xl font-bold text-gray-900">Attendance</h1>
-          {locationRequired && <SyncGpsButton compact syncing={gpsSyncing} onClick={() => requestGps()} />}
-        </div>
+        <PageHeader
+          title="Attendance"
+          subtitle="Mark present, leave, or holiday for today (or a selected date in manual mode)."
+          actions={locationRequired ? <SyncGpsButton compact syncing={gpsSyncing} onClick={() => requestGps()} /> : undefined}
+        />
         {!locationRequired ? (
           <div className="mt-2 space-y-2">
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
@@ -455,6 +459,10 @@ export default function AttendancePage() {
           onSave={() => {
             const existing = byEmployee.get(selected.id);
             if (!locationRequired) {
+              if (existing && existing.status !== status) {
+                setOverwriteConfirm(true);
+                return;
+              }
               manualMutation.mutate({ employee: selected, attStatus: status, existing });
               return;
             }
@@ -482,6 +490,25 @@ export default function AttendancePage() {
           }}
         />
       )}
+      <ConfirmDialog
+        open={overwriteConfirm}
+        title="Change attendance for this day?"
+        message={
+          selected
+            ? `${selected.name} is already marked. Saving will replace the existing status with ${statusLabel(status)}.`
+            : 'Saving will replace the existing attendance for this day.'
+        }
+        confirmLabel="Replace"
+        danger
+        loading={manualMutation.isPending}
+        onCancel={() => setOverwriteConfirm(false)}
+        onConfirm={() => {
+          if (!selected) return;
+          const existing = byEmployee.get(selected.id);
+          setOverwriteConfirm(false);
+          manualMutation.mutate({ employee: selected, attStatus: status, existing });
+        }}
+      />
     </div>
   );
 }

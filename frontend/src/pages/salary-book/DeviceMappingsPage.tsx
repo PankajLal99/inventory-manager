@@ -18,6 +18,8 @@ import type {
   Paginated,
 } from './types';
 import { auth } from '../../lib/auth';
+import ConfirmDialog from './components/ConfirmDialog';
+import { PageHeader } from './ui';
 
 function isAdminUser(user: { is_superuser?: boolean; groups?: string[] } | null) {
   if (!user) return false;
@@ -51,6 +53,7 @@ export default function DeviceMappingsPage() {
   const [deviceId, setDeviceId] = useState('');
   const [pin, setPin] = useState('');
   const [employeeId, setEmployeeId] = useState('');
+  const [removeTarget, setRemoveTarget] = useState<DeviceUserMapping | null>(null);
 
   const createMutation = useMutation({
     mutationFn: async (payload: { device: number; device_user_id: string; employee_id: string }) =>
@@ -123,8 +126,11 @@ export default function DeviceMappingsPage() {
   return (
     <div className="space-y-4 lg:max-w-4xl">
       <div>
-        <h1 className="text-xl lg:text-2xl font-bold">Device mappings</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <PageHeader
+          title="Device mappings"
+          subtitle="Map fingerprint machine PIN to a Salary Book employee."
+        />
+        <p className="text-sm text-slate-500 mt-2">
           Map fingerprint machine PIN → Salary Book employee. Use{' '}
           <strong>Push all employees</strong> after emptying the device: creates PIN mappings
           (EMP-001 → PIN 1) and registers name + PIN only (no fingerprint). Device picks commands
@@ -265,11 +271,7 @@ export default function DeviceMappingsPage() {
                       variant="outline"
                       className="min-h-10 text-red-600"
                       loading={deleteMutation.isPending}
-                      onClick={() => {
-                        if (window.confirm(`Remove PIN ${m.device_user_id}?`)) {
-                          deleteMutation.mutate(m.id);
-                        }
-                      }}
+                      onClick={() => setRemoveTarget(m)}
                     >
                       Remove
                     </Button>
@@ -295,6 +297,24 @@ export default function DeviceMappingsPage() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title="Remove this PIN mapping?"
+        message={
+          removeTarget
+            ? `PIN ${removeTarget.device_user_id} for ${removeTarget.employee_name} will be removed and a delete command queued on the device.`
+            : 'This mapping will be removed.'
+        }
+        confirmLabel="Remove"
+        danger
+        loading={deleteMutation.isPending}
+        onCancel={() => setRemoveTarget(null)}
+        onConfirm={() => {
+          if (!removeTarget) return;
+          deleteMutation.mutate(removeTarget.id);
+          setRemoveTarget(null);
+        }}
+      />
     </div>
   );
 }

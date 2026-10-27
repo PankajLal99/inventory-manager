@@ -1,4 +1,4 @@
-import Button from '../../../components/ui/Button';
+import SalaryButton from '../ui/SalaryButton';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -29,18 +29,18 @@ export default function ConfirmDialog({
         <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
         <p className="mt-2 text-sm text-gray-600 whitespace-pre-line">{message}</p>
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <Button type="button" variant="outline" className="min-h-12" onClick={onCancel}>
+          <SalaryButton type="button" variant="secondary" size="lg" onClick={onCancel}>
             Cancel
-          </Button>
-          <Button
+          </SalaryButton>
+          <SalaryButton
             type="button"
             variant={danger ? 'danger' : 'primary'}
-            className={`min-h-12 ${danger ? '' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+            size="lg"
             loading={loading}
             onClick={onConfirm}
           >
             {confirmLabel}
-          </Button>
+          </SalaryButton>
         </div>
       </div>
     </div>

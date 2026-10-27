@@ -261,13 +261,13 @@ export default function CalendarPage() {
     <div className="space-y-3 sm:space-y-4 lg:space-y-6" data-tutorial="cal-page">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 sm:gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 truncate">
-            {isEmployee ? `${selectedEmployee.name}'s Calendar` : 'Employee Attendance'}
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-semibold tracking-tight text-slate-900 truncate">
+            {isEmployee ? `${selectedEmployee.name}'s Calendar` : 'Attendance calendar'}
           </h1>
-          <p className="text-xs sm:text-sm lg:text-base text-gray-500 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             {isEmployee
               ? 'Tap a day for details. Unmarked days can get in/out times.'
-              : 'Each month sits in its own row. Open an employee to change month.'}
+              : 'Status per day. Open an employee for in/out times, or tap a cell to mark.'}
           </p>
           {isEmployee && selectedEmployee?.period_start && selectedEmployee?.period_end_marker ? (
             <p className="text-xs sm:text-sm text-emerald-800 mt-1 font-medium">
@@ -285,7 +285,7 @@ export default function CalendarPage() {
             href="/pos"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 min-h-11 px-4 rounded-xl bg-white border border-emerald-200 text-emerald-800 font-medium text-sm"
+            className="inline-flex items-center gap-2 min-h-11 px-4 rounded-xl bg-white border border-slate-200 text-slate-700 font-medium text-sm hover:bg-slate-50"
           >
             <ShoppingCart className="h-4 w-4" />
             POS
@@ -298,9 +298,7 @@ export default function CalendarPage() {
               void employeesQuery.refetch();
             }}
           />
-          {isEmployee ? (
-            <MonthNav year={data.year} month={data.month} onChange={setMonth} />
-          ) : null}
+          <MonthNav year={data.year} month={data.month} onChange={setMonth} />
         </div>
       </div>
 
@@ -312,7 +310,7 @@ export default function CalendarPage() {
             setSearch('');
           }}
           className={`min-h-11 px-4 rounded-xl text-sm font-medium ${
-            !employeeId ? 'bg-emerald-600 text-white' : 'bg-white border border-gray-200 text-gray-700'
+            !employeeId ? 'bg-emerald-700 text-white' : 'bg-white border border-slate-200 text-slate-700'
           }`}
         >
           All employees
@@ -328,11 +326,11 @@ export default function CalendarPage() {
               if (employeeId) setEmployee('');
             }}
             placeholder="Search employee..."
-            className="w-full min-h-11 pl-9 pr-3 rounded-xl border border-gray-300 bg-white"
+            className="w-full min-h-11 pl-9 pr-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
             autoComplete="off"
           />
           {search.trim() && searchMatches.length > 0 && (
-            <div className="absolute z-20 mt-1 w-full rounded-xl border border-emerald-100 bg-white shadow-lg overflow-hidden">
+            <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden">
               {searchMatches.map((emp) => (
                 <button
                   key={emp.id}
@@ -368,7 +366,7 @@ export default function CalendarPage() {
               <button
                 type="button"
                 onClick={() => openAddAmount(selectedEmployee)}
-                className="inline-flex items-center gap-1 min-h-10 px-3 rounded-full border border-emerald-500 text-emerald-800 text-sm font-semibold"
+                className="inline-flex items-center gap-1 min-h-10 px-3 rounded-lg border border-emerald-200 text-emerald-800 text-sm font-medium bg-white hover:bg-emerald-50"
               >
                 + Add Amount
               </button>
@@ -403,7 +401,7 @@ export default function CalendarPage() {
               month={data.month}
             />
           </div>
-          <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-2 text-sm">
             <h2 className="font-semibold text-gray-900">
               {(selectedEmployee.salary_cycle_start_day || 1) > 1 ? 'This cycle' : 'This month'}
             </h2>
@@ -427,9 +425,9 @@ export default function CalendarPage() {
             <Row label="Unmarked" value={selectedEmployee.counts.unmarked} />
             <Link
               to={`/salary-book/employees/${selectedEmployee.id}`}
-              className="mt-3 flex items-center justify-center min-h-11 rounded-xl bg-emerald-600 text-white font-semibold"
+              className="mt-3 flex items-center justify-center min-h-11 rounded-xl bg-emerald-700 text-white font-medium"
             >
-              Salary invoice
+              Open profile
             </Link>
           </div>
         </div>

@@ -24,6 +24,7 @@ import { auth } from '../../lib/auth';
 import ConfirmDialog from './components/ConfirmDialog';
 import { useSalaryBookTutorialOptional } from './tutorial/SalaryBookTutorial';
 import { hasSeenSalaryBookTutorial } from './tutorial/storage';
+import { PageHeader, SalaryButton } from './ui';
 
 function isAdminUser(user: { is_superuser?: boolean; groups?: string[] } | null) {
   if (!user) return false;
@@ -218,8 +219,8 @@ export default function SettingsPage() {
         requestSave();
       }}
     >
-      <h1 className="text-xl lg:text-2xl font-bold">Settings</h1>
-      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3">
+      <PageHeader title="Settings" subtitle="Invoice branding, salary calculation, shift defaults, and attendance capture." />
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
         <div>
           <h2 className="font-semibold text-gray-900">Salary invoice header</h2>
           <p className="text-xs text-gray-500 mt-1">
@@ -278,7 +279,7 @@ export default function SettingsPage() {
                 rows={3}
                 value={form.shop_tagline || ''}
                 onChange={(e) => setForm({ ...form, shop_tagline: e.target.value })}
-                className="block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="block w-full px-3 py-2.5 border border-slate-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
               />
               <p className="mt-1 text-xs text-gray-500">Each line shows on its own row. Two lines work best.</p>
             </div>
@@ -327,7 +328,7 @@ export default function SettingsPage() {
 
       </div>
       {isGeoMode && (
-      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 lg:col-span-2">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3 lg:col-span-2">
         <h2 className="font-semibold">Workplace geofence</h2>
         <p className="text-xs text-gray-500">
           When Geo capture mode is on, attendance can only be marked inside this radius.
@@ -356,7 +357,7 @@ export default function SettingsPage() {
       </div>
       )}
 
-      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 text-sm">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3 text-sm">
         <h2 className="font-semibold text-gray-900">Attendance capture</h2>
         {admin ? (
           <Select
@@ -529,13 +530,15 @@ export default function SettingsPage() {
           </>
         )}
       </div>
-      <Button type="submit" className="w-full lg:w-auto min-h-12 px-8 bg-emerald-600 hover:bg-emerald-700" loading={mutation.isPending}>
-        Save Settings
-      </Button>
+      <div className="sticky bottom-20 lg:bottom-4 z-20 bg-white/95 backdrop-blur border border-slate-200 rounded-xl p-3 shadow-sm flex justify-end">
+        <SalaryButton type="submit" size="lg" className="w-full lg:w-auto px-8" loading={mutation.isPending}>
+          Save settings
+        </SalaryButton>
+      </div>
 
       <div
         data-tutorial="settings-tutorial"
-        className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 lg:max-w-xl"
+        className="bg-white rounded-xl border border-slate-200 p-4 space-y-3 lg:max-w-xl"
       >
         <div className="flex items-start gap-3">
           <span className="h-9 w-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">

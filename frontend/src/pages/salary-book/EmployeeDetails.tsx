@@ -1,25 +1,28 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { CalendarDays, Umbrella, Wallet, BookOpen } from 'lucide-react';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { apiError, formatINR, formatDate, formatTime12, monthLabel, periodContaining, statusLabel } from './utils';
-import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
+import EmptyState from '../../components/ui/EmptyState';
+import { apiError, formatINR, formatDate, formatTime, formatTime12, monthLabel, periodContaining, statusLabel } from './utils';
+import type { Attendance, AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useEffect, useMemo, useState } from 'react';
 import { MonthNav } from './components/AttendanceCalendar';
 import ConfirmDialog from './components/ConfirmDialog';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import SalaryInvoice from './components/SalaryInvoice';
 import { toast } from '../../lib/toast';
+import { FilterChips, SalaryButton, SalaryCard, StatusBadge } from './ui';
 
-type Tab = 'profile' | 'attendance' | 'leaves' | 'advances' | 'salaries';
+type Tab = 'profile' | 'history' | 'attendance' | 'leaves' | 'advances' | 'salaries';
 
 export default function EmployeeDetails() {
   const { id } = useParams();
   const empId = Number(id);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>('attendance');
+  const [tab, setTab] = useState<Tab>('profile');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -42,40 +45,33 @@ export default function EmployeeDetails() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-emerald-100 p-5 text-center lg:text-left lg:flex lg:items-center lg:gap-5">
-        <div className="mx-auto lg:mx-0 h-20 w-20 rounded-full bg-emerald-100 flex items-center justify-center text-2xl font-semibold text-emerald-800 shrink-0">
+      <SalaryCard className="text-center lg:text-left lg:flex lg:items-center lg:gap-5">
+        <div className="mx-auto lg:mx-0 h-16 w-16 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-xl font-semibold text-emerald-800 shrink-0">
           {data.name.slice(0, 1)}
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="mt-3 lg:mt-0 text-xl font-bold text-gray-900">{data.name}</h1>
-          <p className="text-sm text-gray-500">{data.employee_id}</p>
-          <p className={`text-sm mt-1 ${data.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
-            {data.status === 'ACTIVE' ? 'Active' : 'Inactive'}
+          <h1 className="mt-3 lg:mt-0 text-xl font-semibold text-slate-900">{data.name}</h1>
+          <p className="text-sm text-slate-500">
+            {data.employee_id}
+            {data.designation ? ` · ${data.designation}` : ''}
           </p>
+          <div className="mt-2">
+            <StatusBadge status={data.status} />
+          </div>
         </div>
         <div className="mt-4 lg:mt-0 flex flex-col sm:flex-row gap-2 justify-center">
-          <button
-            type="button"
-            onClick={() => setTab('attendance')}
-            className="flex items-center justify-center min-h-12 px-5 rounded-xl bg-emerald-600 text-white font-medium"
-          >
-            Salary invoice
-          </button>
+          <SalaryButton onClick={() => setTab('attendance')}>Salary invoice</SalaryButton>
           <Link
             to={`/salary-book/employees/${data.id}/edit`}
-            className="flex items-center justify-center min-h-12 px-5 rounded-xl border border-emerald-200 text-emerald-800 bg-white font-medium"
+            className="inline-flex items-center justify-center min-h-11 px-4 rounded-xl border border-emerald-200 bg-white text-emerald-800 font-medium text-sm hover:bg-emerald-50"
           >
-            Edit Employee
+            Edit
           </Link>
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            className="flex items-center justify-center min-h-12 px-5 rounded-xl border border-red-200 text-red-700 bg-white font-medium"
-          >
+          <SalaryButton variant="ghost" className="text-red-700 hover:bg-red-50" onClick={() => setConfirmDelete(true)}>
             Delete
-          </button>
+          </SalaryButton>
         </div>
-      </div>
+      </SalaryCard>
 
       <ConfirmDialog
         open={confirmDelete}
@@ -88,29 +84,21 @@ export default function EmployeeDetails() {
         onConfirm={() => deleteMutation.mutate()}
       />
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {([
-          ['attendance', 'Salary invoice'],
-          ['profile', 'Profile'],
-          ['leaves', 'Leaves'],
-          ['advances', 'Advances'],
-          ['salaries', 'Salary'],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={`px-3 py-2 rounded-full text-sm whitespace-nowrap min-h-10 ${
-              tab === key ? 'bg-emerald-600 text-white' : 'bg-white border border-gray-200'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <FilterChips
+        chips={[
+          { key: 'profile', label: 'Profile' },
+          { key: 'history', label: 'Attendance' },
+          { key: 'attendance', label: 'Invoice' },
+          { key: 'leaves', label: 'Leaves' },
+          { key: 'advances', label: 'Advances' },
+          { key: 'salaries', label: 'Salary' },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
       {tab === 'profile' && (
-        <div className="bg-white rounded-xl border border-emerald-100 p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+        <SalaryCard className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
           <Field label="Mobile" value={data.mobile} />
           <Field label="Blood Group" value={data.blood_group || '—'} />
           <Field label="Designation" value={data.designation || '—'} />
@@ -155,9 +143,10 @@ export default function EmployeeDetails() {
                 : 'Not linked'
             }
           />
-        </div>
+        </SalaryCard>
       )}
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
+      {tab === 'history' && <PunchHistory employeeId={empId} />}
       {tab === 'attendance' && (
         <AttendanceHistory
           key={`${empId}-${data.date_of_joining}-${data.salary_cycle_start_day || 1}`}
@@ -193,7 +182,7 @@ function EmployeeRules({ employeeId }: { employeeId: number }) {
   if (isLoading) return null;
   if (!data?.length) return null;
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2">
+    <SalaryCard className="space-y-2">
       <h2 className="font-semibold text-gray-900">Attendance rules</h2>
       {data.map((rule) => (
         <div key={rule.id} className="text-sm">
@@ -201,6 +190,41 @@ function EmployeeRules({ employeeId }: { employeeId: number }) {
           {' · '}
           {rule.is_active ? 'Active' : 'Inactive'}
         </div>
+      ))}
+    </SalaryCard>
+  );
+}
+
+function PunchHistory({ employeeId }: { employeeId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['salary-book', 'emp-attendance', employeeId],
+    queryFn: async () =>
+      (await salaryBookApi.employees.attendance(employeeId, { page_size: 50 })).data as Paginated<Attendance>,
+  });
+  if (isLoading) return <LoadingState message="Loading attendance..." />;
+  if (!data?.results.length) {
+    return (
+      <EmptyState
+        icon={CalendarDays}
+        title="No attendance yet."
+        message="Mark attendance from the Attendance page or calendar."
+      />
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {data.results.map((row) => (
+        <SalaryCard key={row.id} className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-medium text-slate-900">{formatDate(row.date)}</div>
+            <div className="text-sm text-slate-500">
+              {row.check_in_time ? `In ${formatTime(row.check_in_time)}` : 'No in'}
+              {' · '}
+              {row.check_out_time ? `Out ${formatTime(row.check_out_time)}` : 'No out'}
+            </div>
+          </div>
+          <StatusBadge status={row.status} />
+        </SalaryCard>
       ))}
     </div>
   );
@@ -234,7 +258,9 @@ function AttendanceHistory({
     return <LoadingState message="Loading attendance..." />;
   }
   const emp = data?.employees[0];
-  if (!emp || !data) return <p className="text-sm text-gray-500">No attendance records found.</p>;
+  if (!emp || !data) {
+    return <EmptyState icon={CalendarDays} title="No attendance records found." />;
+  }
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -257,7 +283,7 @@ function LeaveHistory({ employeeId }: { employeeId: number }) {
     queryFn: async () => (await salaryBookApi.employees.leaves(employeeId)).data as Paginated<LeaveRecord>,
   });
   if (isLoading) return <LoadingState message="Loading leaves..." />;
-  if (!data?.results.length) return <p className="text-sm text-gray-500">No leave records found.</p>;
+  if (!data?.results.length) return <EmptyState icon={Umbrella} title="No leave records found." />;
   return (
     <div className="space-y-2">
       {data.results.map((row) => (
@@ -279,7 +305,7 @@ function AdvanceHistory({ employeeId, employeeName }: { employeeId: number; empl
     queryFn: async () => (await salaryBookApi.employees.advances(employeeId)).data as Paginated<SalaryAdvance>,
   });
   if (isLoading) return <LoadingState message="Loading advances..." />;
-  if (!data?.results.length) return <p className="text-sm text-gray-500">No salary advances recorded.</p>;
+  if (!data?.results.length) return <EmptyState icon={Wallet} title="No salary advances recorded." />;
   return (
     <div className="space-y-3">
       <button
@@ -380,7 +406,7 @@ function SalaryHistory({
     onError: (err) => toast(apiError(err, 'Unable to settle this month.'), 'error'),
   });
   if (isLoading) return <LoadingState message="Loading salary history..." />;
-  if (!data?.results.length) return <p className="text-sm text-gray-500">No salary records yet.</p>;
+  if (!data?.results.length) return <EmptyState icon={BookOpen} title="No salary records yet." />;
   return (
     <div className="space-y-2">
       {data.results.map((row) => {

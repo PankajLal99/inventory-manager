@@ -43,8 +43,8 @@ export default function SalaryBookLogin() {
   }
 
   return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-stone-100 px-4 lg:px-8 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-      <div className="w-full max-w-md lg:max-w-5xl grid grid-cols-1 lg:grid-cols-2 bg-white rounded-2xl shadow-lg border border-emerald-100 overflow-hidden">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-slate-50 px-4 lg:px-8 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+      <div className="w-full max-w-md lg:max-w-5xl grid grid-cols-1 lg:grid-cols-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="hidden lg:flex flex-col justify-between bg-emerald-700 text-white p-10">
           <div>
             <div className="h-14 w-14 rounded-2xl bg-white/15 flex items-center justify-center">

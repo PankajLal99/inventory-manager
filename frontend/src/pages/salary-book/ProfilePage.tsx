@@ -8,7 +8,7 @@ import { displayName, initials, isStandaloneApp } from '../../lib/salaryBookPwa'
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import Input from '../../components/ui/Input';
-import Button from '../../components/ui/Button';
+import { SalaryButton, SalaryCard } from './ui';
 import { toast } from '../../lib/toast';
 import { apiError } from './utils';
 import AddToHomeHint from './components/AddToHomeHint';
@@ -86,7 +86,7 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-5 lg:max-w-xl">
-      <div className="bg-white rounded-2xl border border-emerald-100 p-6 text-center">
+      <SalaryCard className="p-6 text-center rounded-2xl">
         <div className="mx-auto h-20 w-20 rounded-full bg-emerald-700 text-white flex items-center justify-center text-2xl font-semibold">
           {initials(data)}
         </div>
@@ -102,12 +102,12 @@ export default function ProfilePage() {
             <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 text-xs font-medium">Admin</span>
           )}
         </div>
-      </div>
+      </SalaryCard>
 
       {!isStandaloneApp() && <AddToHomeHint />}
 
       <form
-        className="bg-white rounded-2xl border border-emerald-100 p-4 space-y-3"
+        className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3"
         onSubmit={(e) => {
           e.preventDefault();
           saveProfile.mutate();
@@ -123,13 +123,13 @@ export default function ProfilePage() {
         </div>
         <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <Input label="Phone" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        <Button type="submit" className="w-full min-h-12 bg-emerald-600 hover:bg-emerald-700" loading={saveProfile.isPending}>
+        <SalaryButton type="submit" size="lg" className="w-full" loading={saveProfile.isPending}>
           Save profile
-        </Button>
+        </SalaryButton>
       </form>
 
       <form
-        className="bg-white rounded-2xl border border-emerald-100 p-4 space-y-3"
+        className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3"
         onSubmit={(e) => {
           e.preventDefault();
           changePassword.mutate();
@@ -160,14 +160,15 @@ export default function ProfilePage() {
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
         />
-        <Button
+        <SalaryButton
           type="submit"
           variant="outline"
-          className="w-full min-h-12"
+          size="lg"
+          className="w-full"
           loading={changePassword.isPending}
         >
           Update password
-        </Button>
+        </SalaryButton>
       </form>
 
       <button

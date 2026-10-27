@@ -115,7 +115,7 @@ export const SALARY_BOOK_TUTORIAL_STEPS: TutorialStep[] = [
     target: 'nav-more',
     mobileOnly: true,
     title: 'More menu',
-    body: 'Tap More for Leaves, Salary Book, Reports, Devices, Settings, and Profile.',
+    body: 'Tap More for Leaves, Salary Book, Advances, Reports, Devices, Settings, and Profile.',
     notes: ['We’ll open More next so you can see those items.'],
     placement: 'top',
   },
@@ -145,7 +145,7 @@ export const SALARY_BOOK_TUTORIAL_STEPS: TutorialStep[] = [
     route: '/salary-book/salaries',
     target: 'sal-list',
     title: 'How salary deductions work',
-    body: 'Pick a month to see each employee’s gross, leave deduction, taken amounts, and net. Tap View Details to finalize and record payment.',
+    body: 'Pick a month to see each employee’s gross, leave deduction, taken amounts, and net. Tap Open to finalize and record payment.',
     notes: [
       'Leave deduction comes from unpaid leave / absences based on your calculation method.',
       'Taken amounts shown here are still outstanding against this month.',

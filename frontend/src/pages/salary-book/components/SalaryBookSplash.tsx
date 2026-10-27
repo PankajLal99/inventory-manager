@@ -2,7 +2,7 @@ import { Loader2 } from 'lucide-react';
 
 export default function SalaryBookSplash({ message = 'Loading…' }: { message?: string }) {
   return (
-    <div className="min-h-[100dvh] bg-emerald-50 flex flex-col items-center justify-center px-6">
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col items-center justify-center px-6">
       <div className="h-16 w-16 rounded-2xl bg-emerald-700 shadow-lg flex items-center justify-center">
         <svg viewBox="0 0 32 32" className="h-9 w-9" aria-hidden>
           <path fill="#fff" d="M5.5 9.2 15.2 7.4v17.4L5.5 26.4z" />

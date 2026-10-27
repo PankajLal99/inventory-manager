@@ -5,12 +5,12 @@ import { salaryBookApi } from '../../lib/api';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import Textarea from '../../components/ui/Textarea';
-import Button from '../../components/ui/Button';
 import LoadingState from '../../components/ui/LoadingState';
 import { toast } from '../../lib/toast';
 import { apiError, formatINR, scheduledHoursFromTimes, todayISO, toTimeInput } from './utils';
 import ConfirmDialog from './components/ConfirmDialog';
 import type { AttendanceRule, Employee, MtshopCustomerOption, SalaryBookSettings } from './types';
+import { PageHeader, SalaryButton, SectionCard } from './ui';
 
 const BLOOD = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
@@ -177,7 +177,11 @@ export default function EmployeeForm() {
 
   return (
     <form onSubmit={submit} className="space-y-4 lg:max-w-4xl">
-      <h1 className="text-xl lg:text-2xl font-bold text-gray-900">{isEdit ? 'Edit Employee' : 'Add Employee'}</h1>
+      <PageHeader
+        title={isEdit ? 'Edit employee' : 'Add employee'}
+        subtitle={isEdit ? 'Update identity, pay, and shift rules' : 'Identity, pay, and shift for a new person'}
+      />
+      <SectionCard title="Identity" description="How this person appears on attendance and salary records.">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <Input label="Employee ID" placeholder="Auto EMP-001" value={form.employee_id} onChange={(e) => set('employee_id', e.target.value)} />
       <Input label="Employee Name" required value={form.name} onChange={(e) => set('name', e.target.value)} />
@@ -191,6 +195,10 @@ export default function EmployeeForm() {
           <option key={b || 'none'} value={b}>{b || 'Select'}</option>
         ))}
       </Select>
+      </div>
+      </SectionCard>
+      <SectionCard title="Employment and pay" description="Joining date drives the salary cycle. Calculation method can inherit the company default.">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div>
         <Input
           label="Start Date (Date of Joining)"
@@ -229,6 +237,16 @@ export default function EmployeeForm() {
       {form.salary_calculation_method === 'FIXED_WORKING_DAYS' && (
         <Input label="Fixed Working Days" inputMode="numeric" value={form.fixed_working_days} onChange={(e) => set('fixed_working_days', e.target.value)} />
       )}
+      {isEdit && (
+        <Select label="Status" value={form.status} onChange={(e) => set('status', e.target.value)}>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </Select>
+      )}
+      </div>
+      </SectionCard>
+      <SectionCard title="Shift and late rules" description="Leave times blank to use company defaults from Settings.">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <Input
         label="Expected Check-in"
         type="time"
@@ -290,13 +308,9 @@ export default function EmployeeForm() {
           />
         </>
       )}
-      {isEdit && (
-        <Select label="Status" value={form.status} onChange={(e) => set('status', e.target.value)}>
-          <option value="ACTIVE">Active</option>
-          <option value="INACTIVE">Inactive</option>
-        </Select>
-      )}
-      <div className="lg:col-span-2">
+      </div>
+      </SectionCard>
+      <SectionCard title="Shop link" description="Purchases billed to this Shop Boys account are deducted as salary advances.">
         <Select
           label="MT Shop / Shop Boy ledger"
           value={form.mtshop_customer}
@@ -316,22 +330,23 @@ export default function EmployeeForm() {
               </option>
             ))}
         </Select>
-        <p className="mt-1 text-xs text-gray-500">
+        <p className="mt-1 text-xs text-slate-500">
           Purchases billed to this Shop Boys account are deducted as salary advances.
         </p>
-      </div>
-      <div className="lg:col-span-2 bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-sm grid grid-cols-1 sm:grid-cols-3 gap-3">
+      </SectionCard>
+      <SectionCard title="Rate preview">
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Preview label="Scheduled hours" value={`${preview.hours ? preview.hours.toFixed(2) : '—'} h`} hint={form.expected_check_in ? undefined : `Company default ${preview.cin || '09:00'}–${preview.cout || '18:00'}`} />
         <Preview label="Per-day rate" value={formatINR(preview.daily)} />
         <Preview label="Per-hour rate" value={formatINR(preview.hourly)} />
       </div>
-      <div className="lg:col-span-2">
+      </SectionCard>
+      <SectionCard title="Notes">
         <Textarea label="Notes" rows={3} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
-      </div>
-      </div>
-      <Button type="submit" loading={mutation.isPending} className="w-full lg:w-auto min-h-12 px-8 bg-emerald-600 hover:bg-emerald-700">
+      </SectionCard>
+      <SalaryButton type="submit" loading={mutation.isPending} size="lg" className="w-full lg:w-auto px-8">
         Save
-      </Button>
+      </SalaryButton>
       {isEdit && id && <AttendanceRulesEditor employeeId={Number(id)} />}
       <ConfirmDialog
         open={confirmSalary}
@@ -362,6 +377,9 @@ function AttendanceRulesEditor({ employeeId }: { employeeId: number }) {
   const queryClient = useQueryClient();
   const [threshold, setThreshold] = useState('30');
   const [days, setDays] = useState('3');
+  const [pending, setPending] = useState<
+    { type: 'toggle'; rule: AttendanceRule } | { type: 'delete'; id: number } | null
+  >(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['salary-book', 'rules', employeeId],
@@ -418,12 +436,12 @@ function AttendanceRulesEditor({ employeeId }: { employeeId: number }) {
             <div className="text-gray-500">{rule.is_active ? 'Active' : 'Inactive'} · next day marked absent</div>
           </div>
           <div className="flex gap-2">
-            <Button type="button" variant="outline" className="min-h-10" onClick={() => toggle.mutate(rule)}>
+            <SalaryButton type="button" variant="secondary" size="sm" onClick={() => setPending({ type: 'toggle', rule })}>
               {rule.is_active ? 'Disable' : 'Enable'}
-            </Button>
-            <Button type="button" variant="outline" className="min-h-10 text-red-600" onClick={() => remove.mutate(rule.id)}>
+            </SalaryButton>
+            <SalaryButton type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => setPending({ type: 'delete', id: rule.id })}>
               Delete
-            </Button>
+            </SalaryButton>
           </div>
         </div>
       ))}
@@ -431,16 +449,48 @@ function AttendanceRulesEditor({ employeeId }: { employeeId: number }) {
         <Input label="Late by (minutes)" inputMode="numeric" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
         <Input label="Consecutive days" inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} />
         <div className="flex items-end">
-          <Button
+          <SalaryButton
             type="button"
-            className="w-full min-h-12 bg-emerald-600 hover:bg-emerald-700"
+            className="w-full"
+            size="lg"
             loading={create.isPending}
             onClick={() => create.mutate()}
           >
             Add rule
-          </Button>
+          </SalaryButton>
         </div>
       </div>
+      <ConfirmDialog
+        open={pending !== null}
+        title={
+          pending?.type === 'delete'
+            ? 'Delete this rule?'
+            : pending?.type === 'toggle' && pending.rule.is_active
+              ? 'Disable this rule?'
+              : 'Enable this rule?'
+        }
+        message={
+          pending?.type === 'delete'
+            ? 'This consecutive-late rule will be removed for this employee.'
+            : 'Attendance marking for this employee will change after you confirm.'
+        }
+        confirmLabel={
+          pending?.type === 'delete'
+            ? 'Delete'
+            : pending?.type === 'toggle' && pending.rule.is_active
+              ? 'Disable'
+              : 'Enable'
+        }
+        danger={pending?.type === 'delete' || (pending?.type === 'toggle' && pending.rule.is_active)}
+        loading={toggle.isPending || remove.isPending}
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          if (!pending) return;
+          if (pending.type === 'delete') remove.mutate(pending.id);
+          else toggle.mutate(pending.rule);
+          setPending(null);
+        }}
+      />
     </div>
   );
 }

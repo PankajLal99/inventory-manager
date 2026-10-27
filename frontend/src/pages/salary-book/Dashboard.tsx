@@ -22,8 +22,11 @@ import {
   LogIn,
   LogOut,
   Clock3,
+  Wallet,
 } from 'lucide-react';
-import type { Attendance, DashboardLiveUnmarked, DashboardResponse } from './types';
+import type { Attendance, DashboardLiveUnmarked, DashboardResponse, SalaryRecord } from './types';
+import { FilterChips, KpiCard, PageHeader, SalaryButton, SalaryCard, StatusBadge } from './ui';
+import { cx } from './ui/tokens';
 
 const LIVE_FILTERS = [
   { key: 'ALL', label: 'All' },
@@ -34,17 +37,8 @@ const LIVE_FILTERS = [
   { key: 'UNPAID_LEAVE', label: 'Unpaid' },
   { key: 'HOLIDAY', label: 'Holiday' },
   { key: 'UNMARKED', label: 'Not marked' },
+  { key: 'LATE', label: 'Late' },
 ] as const;
-
-const STATUS_PILL: Record<string, string> = {
-  PRESENT: 'bg-emerald-100 text-emerald-800',
-  HALF_DAY: 'bg-amber-100 text-amber-900',
-  ABSENT: 'bg-red-100 text-red-800',
-  PAID_LEAVE: 'bg-sky-100 text-sky-800',
-  UNPAID_LEAVE: 'bg-orange-100 text-orange-800',
-  HOLIDAY: 'bg-violet-100 text-violet-800',
-  UNMARKED: 'bg-gray-100 text-gray-600',
-};
 
 export default function SalaryBookDashboard() {
   const [filter, setFilter] = useState<(typeof LIVE_FILTERS)[number]['key']>('ALL');
@@ -55,13 +49,39 @@ export default function SalaryBookDashboard() {
     refetchOnWindowFocus: true,
   });
 
+  const salariesQuery = useQuery({
+    queryKey: ['salary-book', 'salaries', data?.month.year, data?.month.month, 'dashboard'],
+    enabled: Boolean(data?.month),
+    queryFn: async () =>
+      (
+        await salaryBookApi.salaries.list({
+          year: data!.month.year,
+          month: data!.month.month,
+        })
+      ).data as { results: SalaryRecord[] },
+  });
+
+  const lateCount = useMemo(
+    () => data?.live.marked.filter((row) => row.is_late).length ?? 0,
+    [data]
+  );
+
+  const paymentCounts = useMemo(() => {
+    const rows = salariesQuery.data?.results || [];
+    return {
+      paid: rows.filter((r) => r.payment_status === 'PAID').length,
+      partial: rows.filter((r) => r.payment_status === 'PARTIALLY_PAID').length,
+      pending: rows.filter((r) => r.payment_status === 'PENDING' || !r.payment_status).length,
+    };
+  }, [salariesQuery.data]);
+
   const liveItems = useMemo(() => {
     if (!data?.live) return [];
     const marked = data.live.marked.map((row) => ({ kind: 'marked' as const, row }));
     const unmarked = data.live.unmarked.map((row) => ({ kind: 'unmarked' as const, row }));
-    // Unmarked stay on top; marked sink below after attendance is saved.
     if (filter === 'ALL') return [...unmarked, ...marked];
     if (filter === 'UNMARKED') return unmarked;
+    if (filter === 'LATE') return marked.filter((item) => item.row.is_late);
     return marked.filter((item) => item.row.status === filter);
   }, [data, filter]);
 
@@ -72,38 +92,55 @@ export default function SalaryBookDashboard() {
 
   const today = data.today_attendance;
   const month = data.month;
+  const todayLabel = new Date(`${data.today}T00:00:00`).toLocaleDateString('en-IN', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'short',
+  });
+
+  const todayCards: Array<{
+    label: string;
+    value: number;
+    filter: (typeof LIVE_FILTERS)[number]['key'];
+    tone?: 'default' | 'success' | 'warning' | 'danger' | 'info';
+  }> = [
+    { label: 'Present', value: today.present, filter: 'PRESENT', tone: 'success' },
+    { label: 'Out', value: today.out ?? 0, filter: 'PRESENT' },
+    { label: 'Absent', value: today.absent, filter: 'ABSENT', tone: 'danger' },
+    { label: 'Half Day', value: today.half_day ?? 0, filter: 'HALF_DAY', tone: 'warning' },
+    { label: 'Paid Leave', value: today.paid_leave, filter: 'PAID_LEAVE', tone: 'info' },
+    { label: 'Unpaid', value: today.unpaid_leave, filter: 'UNPAID_LEAVE', tone: 'warning' },
+    { label: 'Holiday', value: today.holiday ?? 0, filter: 'HOLIDAY' },
+    { label: 'Not marked', value: today.unmarked ?? 0, filter: 'UNMARKED', tone: 'danger' },
+    { label: 'Late today', value: lateCount, filter: 'LATE', tone: 'warning' },
+  ];
 
   return (
     <div className="space-y-5 lg:space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-2">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">{data.greeting}</h1>
-          <p className="text-sm text-gray-500 mt-1">Today&apos;s attendance</p>
-        </div>
-        <Link
-          to="/salary-book/calendar"
-          className="hidden lg:inline-flex items-center gap-2 min-h-11 px-4 rounded-xl bg-white border border-emerald-200 text-emerald-800 font-medium"
-        >
-          <CalendarDays className="h-4 w-4" />
-          Open calendar
-        </Link>
-      </div>
+      <PageHeader
+        title={data.greeting}
+        subtitle={`${todayLabel} · today’s attendance`}
+        actions={
+          <Link
+            to="/salary-book/calendar"
+            className="hidden lg:inline-flex items-center gap-2 min-h-11 px-4 rounded-xl bg-white border border-slate-200 text-slate-700 font-medium text-sm hover:bg-slate-50"
+          >
+            <CalendarDays className="h-4 w-4" />
+            Open calendar
+          </Link>
+        }
+      />
 
-      <div className="grid grid-cols-2 lg:grid-cols-8 gap-3">
-        {[
-          { label: 'Present', value: today.present },
-          { label: 'Out', value: today.out ?? 0 },
-          { label: 'Absent', value: today.absent },
-          { label: 'Half Day', value: today.half_day ?? 0 },
-          { label: 'Paid Leave', value: today.paid_leave },
-          { label: 'Unpaid', value: today.unpaid_leave },
-          { label: 'Holiday', value: today.holiday ?? 0 },
-          { label: 'Not marked', value: today.unmarked ?? 0 },
-        ].map((card) => (
-          <div key={card.label} className="bg-white rounded-xl border border-emerald-100 p-4">
-            <div className="text-sm text-gray-500">{card.label}</div>
-            <div className="text-3xl font-semibold text-gray-900 mt-1">{card.value}</div>
-          </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2 sm:gap-3">
+        {todayCards.map((card) => (
+          <KpiCard
+            key={card.label}
+            label={card.label}
+            value={card.value}
+            tone={card.tone}
+            active={filter === card.filter && card.label !== 'Out'}
+            onClick={() => setFilter(card.filter)}
+          />
         ))}
       </div>
 
@@ -118,20 +155,43 @@ export default function SalaryBookDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-4">
-        <div className="bg-white rounded-xl border border-emerald-100 p-4 lg:p-6 space-y-2">
-          <h2 className="font-semibold text-gray-900">{monthLabel(month.year, month.month)}</h2>
-          <Row label="Total Employees" value={String(month.total_employees)} />
-          <Row label="Monthly Payroll" value={formatINR(month.monthly_payroll)} />
-          <Row label="Advances" value={formatINR(month.advances)} />
-          <Row label="Salary Pending" value={formatINR(month.salary_pending)} />
-        </div>
-        <div data-tutorial="dash-actions" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
-          <Action to="/salary-book/attendance" icon={ClipboardCheck} label="Mark Attendance" />
-          <Action to="/salary-book/calendar" icon={CalendarDays} label="Attendance Calendar" />
-          <Action to="/salary-book/employees/new" icon={UserPlus} label="Add Employee" />
-          <Action to="/salary-book/salaries" icon={BookOpen} label="Salary Book" />
-        </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard
+          label="Employees"
+          value={month.total_employees}
+          to="/salary-book/employees"
+          hint={monthLabel(month.year, month.month)}
+        />
+        <KpiCard
+          label="Monthly payroll"
+          value={formatINR(month.monthly_payroll)}
+          to="/salary-book/salaries"
+        />
+        <KpiCard
+          label="Advances"
+          value={formatINR(month.advances)}
+          to="/salary-book/advances"
+          tone="info"
+        />
+        <KpiCard
+          label="Salary pending"
+          value={formatINR(month.salary_pending)}
+          to="/salary-book/salaries"
+          tone="warning"
+          hint={
+            salariesQuery.data
+              ? `${paymentCounts.pending} pending · ${paymentCounts.partial} partial · ${paymentCounts.paid} paid`
+              : undefined
+          }
+        />
+      </div>
+
+      <div data-tutorial="dash-actions" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+        <Action to="/salary-book/attendance" icon={ClipboardCheck} label="Mark attendance" primary />
+        <Action to="/salary-book/calendar" icon={CalendarDays} label="Calendar" />
+        <Action to="/salary-book/employees/new" icon={UserPlus} label="Add employee" />
+        <Action to="/salary-book/advances" icon={Wallet} label="Record advance" />
+        <Action to="/salary-book/salaries" icon={BookOpen} label="Salary Book" />
       </div>
     </div>
   );
@@ -153,13 +213,13 @@ function LiveAttendanceList({
   onRefresh: () => void;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-emerald-100 p-4 lg:p-6">
+    <SalaryCard>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
-          <Radio className={`h-4 w-4 ${fetching ? 'text-emerald-500 animate-pulse' : 'text-emerald-700'}`} />
-          <h2 className="font-semibold text-gray-900">Live timetable</h2>
+          <Radio className={cx('h-4 w-4', fetching ? 'text-emerald-500 animate-pulse' : 'text-emerald-700')} />
+          <h2 className="font-semibold text-slate-900">Live timetable</h2>
         </div>
-        <button type="button" onClick={onRefresh} className="text-xs text-emerald-800 font-medium text-left">
+        <SalaryButton variant="ghost" size="sm" onClick={onRefresh}>
           Updated{' '}
           {updatedAt
             ? new Date(updatedAt).toLocaleTimeString('en-IN', {
@@ -170,39 +230,24 @@ function LiveAttendanceList({
             : '—'}
           {' · '}
           Refresh
-        </button>
+        </SalaryButton>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
-        {LIVE_FILTERS.map((chip) => (
-          <button
-            key={chip.key}
-            type="button"
-            onClick={() => onFilter(chip.key)}
-            className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap min-h-9 ${
-              filter === chip.key ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-900'
-            }`}
-          >
-            {chip.label}
-          </button>
-        ))}
-      </div>
+      <FilterChips chips={LIVE_FILTERS} value={filter} onChange={onFilter} />
       {items.length === 0 ? (
-        <p className="text-sm text-gray-500 py-6 text-center">No one in this list yet.</p>
+        <p className="text-sm text-slate-500 py-6 text-center">No one in this list yet.</p>
       ) : (
-        <ul className="mt-2 space-y-2">
+        <ul className="mt-3 space-y-2">
           {items.map((item) =>
             item.kind === 'unmarked' ? (
               <li
                 key={`u-${item.row.id}`}
-                className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-3 py-3 flex items-center justify-between gap-3"
+                className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2.5 flex items-center justify-between gap-3"
               >
                 <div className="min-w-0">
-                  <div className="font-medium text-gray-900 truncate">{item.row.name}</div>
-                  <div className="text-xs text-gray-500">{item.row.employee_id}</div>
+                  <div className="font-medium text-slate-900 truncate">{item.row.name}</div>
+                  <div className="text-xs text-slate-500">{item.row.employee_id}</div>
                 </div>
-                <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_PILL.UNMARKED}`}>
-                  Not marked
-                </span>
+                <StatusBadge status="UNMARKED" label="Not marked" />
               </li>
             ) : (
               <LiveMarkedRow key={item.row.id} row={item.row} />
@@ -210,7 +255,7 @@ function LiveAttendanceList({
           )}
         </ul>
       )}
-    </div>
+    </SalaryCard>
   );
 }
 
@@ -222,48 +267,23 @@ function LiveMarkedRow({ row }: { row: Attendance }) {
   const method = methodLabel(row.attendance_method);
 
   return (
-    <li
-      className={`rounded-xl border px-3 py-3 ${
-        late ? 'border-amber-200 bg-amber-50/40' : 'border-emerald-100 bg-white'
-      }`}
-    >
+    <li className={cx('rounded-xl border px-3 py-2.5', late ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white')}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-semibold text-gray-900 truncate">{row.employee_name}</div>
-          <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <div className="font-semibold text-slate-900 truncate">{row.employee_name}</div>
+          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span>{row.employee_code}</span>
             {method ? <span className="text-emerald-800">· {method}</span> : null}
             {row.rule_penalty_applied ? <span className="text-red-700">· Penalty</span> : null}
           </div>
         </div>
-        <span
-          className={`text-xs font-medium px-2.5 py-1 rounded-full shrink-0 ${
-            STATUS_PILL[row.status] || STATUS_PILL.UNMARKED
-          }`}
-        >
-          {statusLabel(row.status)}
-        </span>
+        <StatusBadge status={row.status} label={statusLabel(row.status)} />
       </div>
 
-      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <TimeChip
-          icon={LogIn}
-          label="In"
-          value={row.check_in_time ? formatTime(row.check_in_time) : '—'}
-          tone={row.check_in_time ? 'emerald' : 'muted'}
-        />
-        <TimeChip
-          icon={LogOut}
-          label="Out"
-          value={row.check_out_time ? formatTime(row.check_out_time) : '—'}
-          tone={row.check_out_time ? 'emerald' : 'muted'}
-        />
-        <TimeChip
-          icon={Clock3}
-          label="Worked"
-          value={worked || '—'}
-          tone={worked ? 'slate' : 'muted'}
-        />
+      <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <TimeChip icon={LogIn} label="In" value={row.check_in_time ? formatTime(row.check_in_time) : '—'} tone={row.check_in_time ? 'emerald' : 'muted'} />
+        <TimeChip icon={LogOut} label="Out" value={row.check_out_time ? formatTime(row.check_out_time) : '—'} tone={row.check_out_time ? 'emerald' : 'muted'} />
+        <TimeChip icon={Clock3} label="Worked" value={worked || '—'} tone={worked ? 'slate' : 'muted'} />
         <TimeChip
           icon={Clock3}
           label="Late"
@@ -293,7 +313,7 @@ function TimeChip({
         ? 'bg-amber-50 text-amber-950 border-amber-200'
         : tone === 'slate'
           ? 'bg-slate-50 text-slate-800 border-slate-100'
-          : 'bg-gray-50 text-gray-500 border-gray-100';
+          : 'bg-slate-50 text-slate-500 border-slate-100';
 
   return (
     <div className={`rounded-lg border px-2.5 py-2 ${toneClass}`}>
@@ -306,22 +326,28 @@ function TimeChip({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between text-sm py-1">
-      <span className="text-gray-600">{label}</span>
-      <span className="font-medium text-gray-900">{value}</span>
-    </div>
-  );
-}
-
-function Action({ to, icon: Icon, label }: { to: string; icon: typeof ClipboardCheck; label: string }) {
+function Action({
+  to,
+  icon: Icon,
+  label,
+  primary,
+}: {
+  to: string;
+  icon: typeof ClipboardCheck;
+  label: string;
+  primary?: boolean;
+}) {
   return (
     <Link
       to={to}
-      className="flex items-center justify-center gap-2 w-full min-h-12 rounded-xl bg-emerald-600 text-white font-medium lg:bg-white lg:text-emerald-900 lg:border lg:border-emerald-200 lg:hover:bg-emerald-50"
+      className={cx(
+        'flex items-center justify-center gap-2 w-full min-h-12 rounded-xl font-medium text-sm',
+        primary
+          ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+          : 'bg-white text-slate-800 border border-slate-200 hover:bg-slate-50'
+      )}
     >
-      <Icon className="h-5 w-5" />
+      <Icon className="h-4 w-4" />
       {label}
     </Link>
   );

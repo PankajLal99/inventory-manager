@@ -4,7 +4,6 @@ import { useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import { toast } from '../../lib/toast';
@@ -13,6 +12,7 @@ import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import type { Paginated, SalaryAdvance, SalaryRecord } from './types';
+import { PageHeader, SalaryButton, StatusBadge } from './ui';
 
 type DetailTab = 'advances' | 'daily';
 
@@ -81,11 +81,16 @@ export default function SalaryDetails() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl lg:text-2xl font-bold">{data.employee_name}</h1>
-        <p className="text-sm text-gray-500">{data.employee_code}</p>
-        <p className="text-sm text-gray-700 mt-1">{monthLabel(data.year, data.month)}</p>
-      </div>
+      <PageHeader
+        title={data.employee_name}
+        subtitle={`${data.employee_code} · ${monthLabel(data.year, data.month)}`}
+        actions={
+          <div className="flex items-center gap-2">
+            <StatusBadge status={data.payment_status} />
+            <StatusBadge status={data.status} />
+          </div>
+        }
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <Section title="Attendance">
@@ -122,7 +127,7 @@ export default function SalaryDetails() {
             </span>
           </div>
         </button>
-        <div className="flex justify-between font-semibold pt-2 border-t">
+        <div className="flex justify-between font-semibold pt-2 border-t border-slate-100 tabular-nums">
           <span>Net Payable</span>
           <span>{formatINR(data.net_salary)}</span>
         </div>
@@ -132,7 +137,7 @@ export default function SalaryDetails() {
         <Row label="Paid" value={formatINR(data.total_paid)} />
         <Row label="Remaining" value={formatINR(data.remaining)} />
         <Row label="Status" value={statusLabel(data.payment_status)} />
-        <div className="text-xs text-gray-500">{data.status === 'FINALIZED' ? 'Finalized' : 'Draft'}</div>
+        <div className="text-xs text-slate-500">{data.status === 'FINALIZED' ? 'Locked (finalized)' : 'Calculated (draft)'}</div>
         <div className="space-y-2 pt-2">
           {(data.payments || []).map((p) => (
             <div key={p.id} className="flex justify-between text-sm">
@@ -155,8 +160,8 @@ export default function SalaryDetails() {
 
       </div>
 
-      <div className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
-        <div className="flex border-b border-emerald-50">
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="flex border-b border-slate-100">
           <button
             type="button"
             onClick={() => setDetailTab('advances')}
@@ -197,17 +202,17 @@ export default function SalaryDetails() {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-3">
-      <Button className="w-full lg:w-auto min-h-12 px-6 bg-emerald-600 hover:bg-emerald-700" onClick={() => setPayOpen(true)}>
-        Record Payment
-      </Button>
+      <SalaryButton size="lg" className="w-full lg:w-auto px-6" onClick={() => setPayOpen(true)}>
+        Record payment
+      </SalaryButton>
       {data.status === 'DRAFT' ? (
-        <Button className="w-full lg:w-auto min-h-12 px-6" variant="outline" onClick={() => setConfirm('finalize')}>
-          Finalize Salary
-        </Button>
+        <SalaryButton size="lg" variant="outline" className="w-full lg:w-auto px-6" onClick={() => setConfirm('finalize')}>
+          Finalize salary
+        </SalaryButton>
       ) : (
-        <Button className="w-full lg:w-auto min-h-12 px-6" variant="outline" onClick={() => setConfirm('reopen')}>
-          Reopen Salary
-        </Button>
+        <SalaryButton size="lg" variant="secondary" className="w-full lg:w-auto px-6" onClick={() => setConfirm('reopen')}>
+          Reopen salary
+        </SalaryButton>
       )}
       </div>
 
@@ -262,7 +267,7 @@ export default function SalaryDetails() {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-4">
+    <div className="bg-white rounded-xl border border-slate-200 p-4">
       <h2 className="font-semibold mb-2">{title}</h2>
       <div className="space-y-1 text-sm">{children}</div>
     </div>
@@ -499,8 +504,8 @@ function PaymentForm({
         </Select>
         <Input label="Reference Number" value={reference} onChange={(e) => setReference(e.target.value)} />
         <div className="grid grid-cols-2 gap-3">
-          <Button type="button" variant="outline" className="min-h-12" onClick={onClose}>Cancel</Button>
-          <Button type="submit" className="min-h-12 bg-emerald-600 hover:bg-emerald-700" loading={loading}>Save</Button>
+          <SalaryButton type="button" variant="secondary" size="lg" onClick={onClose}>Cancel</SalaryButton>
+          <SalaryButton type="submit" size="lg" loading={loading}>Save</SalaryButton>
         </div>
       </form>
     </SalaryBookSheet>

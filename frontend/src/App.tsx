@@ -24,6 +24,7 @@ import SettingsPage from './pages/salary-book/SettingsPage';
 import CalendarPage from './pages/salary-book/CalendarPage';
 import ProfilePage from './pages/salary-book/ProfilePage';
 import DeviceMappingsPage from './pages/salary-book/DeviceMappingsPage';
+import AdvanceList from './pages/salary-book/AdvanceList';
 import Register from './pages/auth/Register';
 import Dashboard from './pages/dashboard/Dashboard';
 import Products from './pages/products/Products';
@@ -277,7 +278,7 @@ function App() {
                 <Route path="salary-book/attendance" element={<AttendancePage />} />
                 <Route path="salary-book/calendar" element={<CalendarPage />} />
                 <Route path="salary-book/leaves" element={<LeaveList />} />
-                <Route path="salary-book/advances" element={<Navigate to="/salary-book/calendar" replace />} />
+                <Route path="salary-book/advances" element={<AdvanceList />} />
                 <Route
                   path="salary-book/salaries"
                   element={

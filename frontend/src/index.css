@@ -9,15 +9,35 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html.salary-book {
+  --sb-canvas: #f8fafc;
+  --sb-surface: #ffffff;
+  --sb-border: #e2e8f0;
+  --sb-text: #0f172a;
+  --sb-muted: #64748b;
+  --sb-primary: #047857;
+  --sb-primary-hover: #065f46;
+  --sb-primary-soft: #ecfdf5;
+  --sb-danger: #dc2626;
+  --sb-radius: 0.75rem;
+  --sb-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+}
+
 html.salary-book,
 html.salary-book body {
-  background: #ecfdf5;
+  background: var(--sb-canvas);
+  color: var(--sb-text);
   overscroll-behavior-y: none;
 }
 
 html.salary-book body {
   min-height: 100dvh;
   min-height: -webkit-fill-available;
+}
+
+html.salary-book :focus-visible {
+  outline: 2px solid var(--sb-primary);
+  outline-offset: 2px;
 }
 
 /* Scale down on mobile devices for better fit */

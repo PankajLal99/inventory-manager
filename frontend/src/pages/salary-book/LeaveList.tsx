@@ -7,6 +7,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
 import Select from '../../components/ui/Select';
+import { PageHeader, SalaryButton, SalaryCard } from './ui';
 import Input from '../../components/ui/Input';
 import Textarea from '../../components/ui/Textarea';
 import { toast } from '../../lib/toast';
@@ -56,16 +57,15 @@ export default function LeaveList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Leaves</h1>
-        <Button
-          data-tutorial="leave-add"
-          className="min-h-11 bg-emerald-600 hover:bg-emerald-700"
-          onClick={() => setOpen(true)}
-        >
-          Add Leave
-        </Button>
-      </div>
+      <PageHeader
+        title="Leaves"
+        subtitle="Paid and unpaid leave ranges that feed the calendar and salary."
+        actions={
+          <SalaryButton data-tutorial="leave-add" onClick={() => setOpen(true)}>
+            Add leave
+          </SalaryButton>
+        }
+      />
       {listQuery.isLoading && <LoadingState message="Loading leaves..." />}
       {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
       {!listQuery.isLoading && (listQuery.data?.results.length ?? 0) === 0 && (
@@ -73,7 +73,7 @@ export default function LeaveList() {
       )}
       <div className="space-y-2 lg:hidden">
         {listQuery.data?.results.map((row) => (
-          <div key={row.id} className="bg-white rounded-xl border border-emerald-100 p-4">
+          <SalaryCard key={row.id}>
             <div className="font-semibold">{row.employee_name}</div>
             <div className="text-sm text-gray-600">
               {row.leave_type === 'PAID' ? 'Paid Leave' : 'Unpaid Leave'} · {row.days} days
@@ -87,7 +87,7 @@ export default function LeaveList() {
               </button>
             )}
             {row.status === 'VOID' && <div className="text-xs text-gray-400 mt-1">Voided</div>}
-          </div>
+          </SalaryCard>
         ))}
       </div>
       {(listQuery.data?.results.length ?? 0) > 0 && (

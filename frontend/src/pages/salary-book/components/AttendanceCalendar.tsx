@@ -3,16 +3,9 @@ import { ChevronLeft, ChevronRight, Plus, RefreshCw, Umbrella } from 'lucide-rea
 import { Link } from 'react-router-dom';
 import { formatINR, formatTime12, monthLabel, statusLabel } from '../utils';
 import type { CalendarEmployee, CalendarKpis, CalendarTodayKpis, CalendarDayCell } from '../types';
+import { STATUS_STYLE as TOKEN_STATUS } from '../ui/tokens';
 
-export const STATUS_STYLE: Record<string, { bg: string; text: string; short: string }> = {
-  PRESENT: { bg: 'bg-emerald-500', text: 'text-white', short: 'P' },
-  HALF_DAY: { bg: 'bg-amber-400', text: 'text-amber-950', short: '½' },
-  ABSENT: { bg: 'bg-red-500', text: 'text-white', short: 'A' },
-  PAID_LEAVE: { bg: 'bg-sky-500', text: 'text-white', short: 'PL' },
-  UNPAID_LEAVE: { bg: 'bg-orange-500', text: 'text-white', short: 'UL' },
-  HOLIDAY: { bg: 'bg-violet-500', text: 'text-white', short: 'H' },
-  BEFORE_JOINING: { bg: 'bg-gray-100', text: 'text-gray-300', short: '' },
-};
+export const STATUS_STYLE = TOKEN_STATUS;
 
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 /** Single-letter headers for narrow month grids (Tue/Thu stay distinct as T/Th via short labels). */
@@ -84,7 +77,7 @@ export function CalendarRefreshButton({
       type="button"
       onClick={onRefresh}
       disabled={fetching}
-      className="inline-flex items-center gap-2 min-h-11 px-3 sm:px-4 rounded-xl bg-white border border-emerald-200 text-emerald-800 font-medium text-sm disabled:opacity-60"
+      className="inline-flex items-center gap-2 min-h-11 px-3 sm:px-4 rounded-xl bg-white border border-slate-200 text-slate-700 font-medium text-sm disabled:opacity-60 hover:bg-slate-50"
       aria-label="Refresh calendar"
       title={
         updatedAt
@@ -122,7 +115,7 @@ export function KpiStrip({ kpis, compact }: { kpis: CalendarKpis; compact?: bool
       {cards.map((card) => (
         <div
           key={card.label}
-          className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 shrink-0 w-[6.75rem] snap-start sm:w-auto sm:shrink"
+          className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 shrink-0 w-[6.75rem] snap-start sm:w-auto sm:shrink"
         >
           <div className="text-[11px] sm:text-sm text-gray-500 leading-tight">{card.label}</div>
           <div className="text-lg sm:text-2xl font-semibold text-gray-900 mt-0.5 sm:mt-1 tabular-nums">
@@ -154,7 +147,7 @@ export function CalendarSummaryStrip({
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 sm:gap-3">
       {cards.map((card) => (
-        <div key={card.label} className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4">
+        <div key={card.label} className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4">
           <div className="text-[11px] sm:text-sm text-gray-500 leading-tight">{card.label}</div>
           <div className="text-xl sm:text-2xl font-semibold text-gray-900 mt-0.5 tabular-nums">
             {card.value}
@@ -211,8 +204,8 @@ function LegendItems({ className = '' }: { className?: string }) {
           </span>
         ))}
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-3 w-3 sm:h-3.5 sm:w-3.5 rounded-sm bg-gray-200 ring-1 ring-dashed ring-emerald-300" />
-        Unmarked (tap)
+        <span className="h-3 w-3 sm:h-3.5 sm:w-3.5 rounded-sm bg-white ring-1 ring-dashed ring-slate-400" />
+        Unmarked
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="text-xs font-semibold text-rose-600">Sun</span>
@@ -226,18 +219,10 @@ function LegendItems({ className = '' }: { className?: string }) {
 
 export function CalendarLegend() {
   return (
-    <>
-      <details className="sm:hidden group rounded-xl border border-emerald-100 bg-white">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-medium text-gray-700 marker:content-none [&::-webkit-details-marker]:hidden">
-          Legend
-          <span className="text-gray-400 group-open:rotate-180 transition-transform">▾</span>
-        </summary>
-        <div className="border-t border-emerald-50 px-3 py-3">
-          <LegendItems />
-        </div>
-      </details>
-      <LegendItems className="hidden sm:flex" />
-    </>
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Legend</div>
+      <LegendItems />
+    </div>
   );
 }
 
@@ -331,6 +316,7 @@ function DayStatusCell({
   isPast,
   compact,
   embedded,
+  statusOnly,
   clickable,
   onClick,
 }: {
@@ -342,6 +328,7 @@ function DayStatusCell({
   isPast?: boolean;
   compact?: boolean;
   embedded?: boolean;
+  statusOnly?: boolean;
   clickable?: boolean;
   onClick?: () => void;
 }) {
@@ -390,7 +377,7 @@ function DayStatusCell({
     );
   }
 
-  if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
+  if (!statusOnly && hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
     return wrap(
       <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} embedded={embedded} />,
       interactive ? 'ring-1 ring-dashed ring-emerald-300' : ''
@@ -398,33 +385,38 @@ function DayStatusCell({
   }
 
   if (!status || status === 'BEFORE_JOINING') {
-    // Past unmarked weekdays look absent (red) so missed punches are obvious; today stays a dash.
-    if (isPast && status !== 'BEFORE_JOINING') {
+    if (status === 'BEFORE_JOINING') {
       return wrap(
-        <div
-          className={`flex h-full w-full flex-col items-center justify-center bg-red-500 text-white ${minH} ${round} ${
-            interactive ? 'ring-1 ring-dashed ring-red-200 hover:opacity-90' : ''
-          }`}
-        >
-          <span className={`font-bold leading-none ${compact ? 'text-sm' : 'text-base'}`}>A</span>
-          {interactive && (
-            <span className="mt-1 text-[9px] font-medium leading-none opacity-90">
-              {compact ? 'Add' : 'Tap'}
-            </span>
-          )}
+        <div className={`flex h-full w-full items-center justify-center bg-slate-50 text-slate-300 ${minH} ${round}`}>
+          <span className="text-xs leading-none">—</span>
         </div>
       );
     }
 
     return wrap(
       <div
-        className={`flex h-full w-full items-center justify-center bg-gray-100 text-gray-400 ${minH} ${round} ${
+        className={`flex h-full w-full flex-col items-center justify-center bg-white text-slate-400 ${minH} ${round} ${
           todayRing ? 'ring-2 ring-emerald-500' : ''
-        } ${interactive ? 'ring-1 ring-dashed ring-emerald-300 hover:bg-emerald-50 hover:text-emerald-700' : ''}`}
+        } ${interactive ? 'ring-1 ring-dashed ring-slate-300 hover:bg-emerald-50 hover:text-emerald-700' : 'ring-1 ring-dashed ring-slate-200'}`}
       >
-        <span className={`leading-none ${interactive ? (compact ? 'text-[10px] font-medium' : 'text-xs font-medium') : 'text-base'}`}>
-          {interactive ? (compact ? 'Add' : '+ Add') : '-'}
+        <span className={`leading-none ${compact ? 'text-[10px] font-medium' : 'text-xs font-medium'}`}>
+          {interactive ? (isPast ? 'Mark' : 'Add') : '—'}
         </span>
+      </div>
+    );
+  }
+
+  if (statusOnly && hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY')) {
+    const lateIn = Boolean(cell?.is_late);
+    const style = lateIn || status === 'HALF_DAY' ? STATUS_STYLE.HALF_DAY : STATUS_STYLE.PRESENT;
+    return wrap(
+      <div
+        className={`flex h-full w-full flex-col items-center justify-center ${minH} ${round} ${style.bg} ${style.text} ${
+          todayRing ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
+        }`}
+      >
+        <span className={`font-bold leading-none ${compact ? 'text-sm' : 'text-base'}`}>{style.short}</span>
+        {lateIn ? <span className="mt-0.5 text-[9px] font-medium leading-none">L</span> : null}
       </div>
     );
   }
@@ -499,17 +491,14 @@ function MobileDayChip({
       sub = '';
     }
   } else if (!status || status === 'BEFORE_JOINING') {
-    if (isPast && status !== 'BEFORE_JOINING') {
-      bg = 'bg-red-500 text-white';
-      sub = 'A';
-    } else if (status === 'BEFORE_JOINING') {
-      bg = 'bg-gray-50 text-gray-300';
+    if (status === 'BEFORE_JOINING') {
+      bg = 'bg-slate-50 text-slate-300';
       sub = '';
     } else {
       bg = isToday
         ? 'bg-white text-emerald-700 ring-1 ring-dashed ring-emerald-400'
-        : 'bg-gray-100 text-gray-400';
-      sub = '+';
+        : 'bg-white text-slate-400 ring-1 ring-dashed ring-slate-300';
+      sub = isPast ? '·' : '+';
     }
   } else {
     const style = STATUS_STYLE[status];
@@ -837,7 +826,7 @@ export function EmployeeMonthGrid({
   const selected = dayList.find((x) => x.iso === selectedIso);
 
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 lg:p-6 space-y-2">
+    <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4 lg:p-6 space-y-2">
       {cycleDay > 1 && dayList.length > 0 ? (
         <p className="text-xs text-emerald-800 font-medium px-0.5">
           Cycle from joining day {cycleDay}:{' '}
@@ -986,81 +975,50 @@ function AdminStripDay({
   const status = cell?.status;
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const inTime = formatTime12(cell?.check_in_time);
-  const outTime = formatTime12(cell?.check_out_time);
-  const hasPunches = Boolean(inTime || outTime);
-
   const lateIn = Boolean(cell?.is_late);
-  const earlyOut = Boolean(cell?.is_early && cell?.check_out_time);
-  const inBg = lateIn ? 'bg-amber-400 text-amber-950' : 'bg-emerald-500 text-white';
-  const outBg = !cell?.check_out_time
-    ? 'bg-slate-300 text-slate-700'
-    : earlyOut
-      ? 'bg-orange-500 text-white'
-      : 'bg-sky-600 text-white';
 
-  let dateTone = 'bg-slate-100 text-gray-700 border-b border-slate-200';
-  if (sunday) dateTone = 'bg-rose-100 text-rose-700 border-b border-rose-200';
-  else if (isToday) dateTone = 'bg-emerald-100 text-emerald-900 border-b border-emerald-200';
+  let dateTone = 'bg-slate-50 text-slate-600 border-b border-slate-200';
+  if (sunday) dateTone = 'bg-rose-50 text-rose-700 border-b border-rose-100';
+  else if (isToday) dateTone = 'bg-emerald-50 text-emerald-900 border-b border-emerald-100';
 
   let body: ReactNode;
-  if (hasPunches && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
+  if (sunday && !marked) {
     body = (
-      <div className="flex w-full flex-1 flex-col">
-        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${inBg}`}>
-          <span className="text-[10px] font-semibold leading-none tabular-nums">{inTime || '—'}</span>
-        </div>
-        <div className={`flex flex-1 items-center justify-center px-0.5 py-1 ${outBg}`}>
-          <span className="text-[10px] font-semibold leading-none tabular-nums">
-            {isFuture ? '—' : outTime || (isToday && !outTime ? '…' : '—')}
-          </span>
-        </div>
-      </div>
-    );
-  } else if (sunday && !marked) {
-    body = (
-      <div className="flex flex-1 items-center justify-center bg-rose-50 px-0.5 py-2">
-        <span className="text-[10px] font-semibold text-rose-600">Sun</span>
+      <div className="flex flex-1 items-center justify-center bg-rose-50 px-0.5 py-1.5">
+        <span className="text-[10px] font-semibold text-rose-600">Off</span>
       </div>
     );
   } else if (status && status !== 'BEFORE_JOINING') {
-    const style = STATUS_STYLE[status];
+    const style =
+      lateIn && status === 'PRESENT' ? STATUS_STYLE.HALF_DAY : STATUS_STYLE[status] || STATUS_STYLE.UNMARKED;
     body = (
-      <div
-        className={`flex flex-1 flex-col items-center justify-center px-0.5 py-2 ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'}`}
-      >
-        <span className="text-xs font-bold leading-none">{style?.short || status}</span>
+      <div className={`flex flex-1 flex-col items-center justify-center px-0.5 py-1.5 ${style.bg} ${style.text}`}>
+        <span className="text-xs font-bold leading-none">{style.short}</span>
+        {lateIn ? <span className="mt-0.5 text-[8px] font-medium leading-none">L</span> : null}
       </div>
     );
   } else if (isFuture || status === 'BEFORE_JOINING') {
     body = (
-      <div className="flex flex-1 items-center justify-center bg-gray-50 px-0.5 py-2 text-gray-300">
+      <div className="flex flex-1 items-center justify-center bg-slate-50 px-0.5 py-1.5 text-slate-300">
         <span className="text-xs leading-none">—</span>
-      </div>
-    );
-  } else if (isPast) {
-    body = (
-      <div className="flex flex-1 flex-col items-center justify-center bg-red-500 px-0.5 py-2 text-white">
-        <span className="text-xs font-bold leading-none">A</span>
-        {onAdd ? <span className="mt-0.5 text-[8px] font-medium leading-none opacity-90">Add</span> : null}
       </div>
     );
   } else {
     body = (
-      <div className="flex flex-1 items-center justify-center bg-white px-0.5 py-2 text-emerald-700">
-        <span className="text-[10px] font-medium leading-none">{onAdd ? 'Add' : '—'}</span>
+      <div className="flex flex-1 items-center justify-center bg-white px-0.5 py-1.5 text-slate-400 ring-inset">
+        <span className="text-[10px] font-medium leading-none">{isPast ? '·' : '+'}</span>
       </div>
     );
   }
 
   const box = (
     <div
-      className={`flex h-[4.25rem] w-full flex-col overflow-hidden rounded-md border ${
-        sunday ? 'border-rose-300' : isToday ? 'border-emerald-600' : 'border-slate-300'
+      className={`flex h-[3.5rem] w-full flex-col overflow-hidden rounded-md border ${
+        sunday ? 'border-rose-200' : isToday ? 'border-emerald-600' : 'border-slate-200'
       } ${isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''} ${isFuture ? 'opacity-45' : ''}`}
     >
-      <div className={`shrink-0 py-1 text-center text-[10px] font-bold tabular-nums leading-none ${dateTone}`}>
-        {day}/{month}
+      <div className={`shrink-0 py-0.5 text-center text-[10px] font-bold tabular-nums leading-none ${dateTone}`}>
+        {day}
       </div>
       {body}
     </div>
@@ -1133,7 +1091,7 @@ export function AdminMonthGrid({
   };
 
   const employeeHeader = (emp: CalendarEmployee, dayList: CycleDayItem[], cycleDay: number) => (
-    <div className="flex flex-wrap items-center gap-2 mb-2 min-h-8 lg:gap-3 lg:px-4 lg:py-3 lg:mb-0 lg:border-b lg:border-emerald-50">
+    <div className="flex flex-wrap items-center gap-2 mb-2 min-h-8 lg:gap-3 lg:px-4 lg:py-3 lg:mb-0 lg:border-b lg:border-slate-100">
       <Link
         to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
         className="min-w-0 flex-1"
@@ -1150,15 +1108,15 @@ export function AdminMonthGrid({
       </Link>
       <Link
         to={`/salary-book/employees/${emp.id}`}
-        className="shrink-0 inline-flex items-center min-h-9 px-2.5 rounded-full bg-emerald-600 text-white text-xs sm:text-sm font-semibold lg:min-h-10 lg:px-3"
+        className="shrink-0 inline-flex items-center min-h-9 px-2.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-xs sm:text-sm font-medium lg:min-h-10 lg:px-3 hover:bg-slate-50"
       >
-        Salary invoice
+        Profile
       </Link>
       {onAddAmount && (
         <button
           type="button"
           onClick={() => onAddAmount(emp)}
-          className="shrink-0 inline-flex items-center gap-1 min-h-9 px-2.5 rounded-full border border-emerald-500 text-emerald-800 text-xs sm:text-sm font-semibold lg:min-h-10 lg:px-3"
+          className="shrink-0 inline-flex items-center gap-1 min-h-9 px-2.5 rounded-lg border border-emerald-200 text-emerald-800 text-xs sm:text-sm font-medium lg:min-h-10 lg:px-3 bg-white hover:bg-emerald-50"
         >
           <Plus className="h-3.5 w-3.5 lg:h-4 lg:w-4" />
           Add Amount
@@ -1172,17 +1130,17 @@ export function AdminMonthGrid({
 
   return (
     <>
-      {/* Mobile: compact day/month squares (was already fine) */}
+      {/* Mobile: compact status squares */}
       <div className="lg:hidden space-y-3">
-        <p className="text-[11px] text-gray-500 px-0.5">
-          Each box is day/month. Green = in · Blue = out. Months are separate rows.
+        <p className="text-[11px] text-slate-500 px-0.5">
+          Colored letter = status. Dashed = unmarked. Tap a day to mark or correct.
         </p>
         {employees.map((emp) => {
           const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
           const cycleDay = emp.salary_cycle_start_day || 1;
           const months = groupDaysByMonth(dayList);
           return (
-            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-3 py-3">
+            <div key={emp.id} className="bg-white rounded-xl border border-slate-200 px-3 py-3">
               {employeeHeader(emp, dayList, cycleDay)}
               <div className="space-y-2">
                 {months.map((group) => (
@@ -1192,7 +1150,7 @@ export function AdminMonthGrid({
                       {group.items.map((item) => {
                         const click = dayClickProps(emp, item.iso, item.cell);
                         return (
-                          <div key={item.iso} className="w-[4.5rem]">
+                          <div key={item.iso} className="w-[2.75rem]">
                             <AdminStripDay
                               year={item.y}
                               month={item.m}
@@ -1216,17 +1174,17 @@ export function AdminMonthGrid({
         })}
       </div>
 
-      {/* Desktop: larger IN/OUT cells, still fixed monthly rows (no sideways scroll) */}
+      {/* Desktop: compact status cells, months wrap as rows */}
       <div className="hidden lg:block space-y-4">
-        <p className="text-xs text-gray-500 px-0.5">
-          Day/month is inside each box. Months wrap as rows — open an employee to change month.
+        <p className="text-xs text-slate-500 px-0.5">
+          Status letter per day. Open an employee for in/out times. Tap a cell to mark or correct.
         </p>
         {employees.map((emp) => {
           const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
           const cycleDay = emp.salary_cycle_start_day || 1;
           const months = groupDaysByMonth(dayList);
           return (
-            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
+            <div key={emp.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               {employeeHeader(emp, dayList, cycleDay)}
               <div className="px-4 py-3 space-y-3">
                 {months.map((group) => (
@@ -1239,7 +1197,7 @@ export function AdminMonthGrid({
                         return (
                           <div
                             key={item.iso}
-                            className={`w-[5.75rem] overflow-hidden rounded-lg border ${
+                            className={`w-[3.25rem] overflow-hidden rounded-lg border ${
                               sunday
                                 ? 'border-rose-300'
                                 : item.iso === today
@@ -1268,7 +1226,9 @@ export function AdminMonthGrid({
                               day={item.d}
                               cell={item.cell}
                               isToday={false}
+                              compact
                               embedded
+                              statusOnly
                               {...click}
                             />
                           </div>

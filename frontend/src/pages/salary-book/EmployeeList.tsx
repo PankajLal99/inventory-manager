@@ -6,14 +6,18 @@ import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
-import { formatINR } from './utils';
+import { formatDate, formatINR } from './utils';
 import type { Employee, Paginated } from './types';
+import { FilterChips, PageHeader, SalaryCard, SalaryTable, SalaryTd, StatusBadge } from './ui';
 
 export default function EmployeeList() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
-  const [status, setStatus] = useState<'ACTIVE' | 'INACTIVE' | ''>('ACTIVE');
-  const params = useMemo(() => ({ q: q || undefined, status: status || undefined, page_size: 50 }), [q, status]);
+  const [status, setStatus] = useState<'ACTIVE' | 'INACTIVE' | 'ALL'>('ACTIVE');
+  const params = useMemo(
+    () => ({ q: q || undefined, status: status === 'ALL' ? undefined : status, page_size: 50 }),
+    [q, status]
+  );
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'employees', params],
@@ -22,43 +26,41 @@ export default function EmployeeList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl lg:text-2xl font-bold text-gray-900">Employees</h1>
-        <Link
-          to="/salary-book/employees/new"
-          data-tutorial="emp-add"
-          className="inline-flex items-center justify-center h-11 w-11 lg:w-auto lg:px-4 lg:gap-2 rounded-full lg:rounded-xl bg-emerald-600 text-white"
-          aria-label="Add employee"
-        >
-          <Plus className="h-5 w-5" />
-          <span className="hidden lg:inline font-medium">Add Employee</span>
-        </Link>
-      </div>
+      <PageHeader
+        title="Employees"
+        subtitle="Directory of people on the salary book"
+        actions={
+          <Link
+            to="/salary-book/employees/new"
+            data-tutorial="emp-add"
+            aria-label="Add employee"
+            className="inline-flex items-center justify-center gap-2 h-11 w-11 lg:w-auto lg:px-4 rounded-full lg:rounded-xl bg-emerald-700 text-white font-medium text-sm hover:bg-emerald-800"
+          >
+            <Plus className="h-5 w-5" />
+            <span className="hidden lg:inline">Add employee</span>
+          </Link>
+        }
+      />
 
       <div className="flex flex-col lg:flex-row gap-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search employee..."
-            className="w-full min-h-12 pl-9 pr-3 rounded-xl border border-gray-300 bg-white"
+            placeholder="Search name, ID, or mobile…"
+            className="w-full min-h-12 pl-9 pr-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
           />
         </div>
-        <div className="flex gap-2">
-          {(['ACTIVE', 'INACTIVE'] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setStatus(status === s ? '' : s)}
-              className={`px-4 py-2 rounded-full text-sm min-h-10 ${
-                status === s ? 'bg-emerald-600 text-white' : 'bg-white border border-gray-200 text-gray-700'
-              }`}
-            >
-              {s === 'ACTIVE' ? 'Active' : 'Inactive'}
-            </button>
-          ))}
-        </div>
+        <FilterChips
+          chips={[
+            { key: 'ACTIVE', label: 'Active' },
+            { key: 'INACTIVE', label: 'Inactive' },
+            { key: 'ALL', label: 'All' },
+          ]}
+          value={status}
+          onChange={setStatus}
+        />
       </div>
 
       {isLoading && <LoadingState message="Loading employees..." />}
@@ -69,8 +71,11 @@ export default function EmployeeList() {
           title="No employees yet."
           message="Add your first employee to start managing Salary Book."
           action={
-            <Link to="/salary-book/employees/new" className="inline-flex min-h-12 px-4 items-center rounded-xl bg-emerald-600 text-white font-medium">
-              Add Employee
+            <Link
+              to="/salary-book/employees/new"
+              className="inline-flex items-center justify-center min-h-11 px-4 rounded-xl bg-emerald-700 text-white font-medium text-sm"
+            >
+              Add employee
             </Link>
           }
         />
@@ -78,7 +83,7 @@ export default function EmployeeList() {
 
       <div className="space-y-3 lg:hidden">
         {data?.results.map((emp) => (
-          <div
+          <SalaryCard
             key={emp.id}
             role="link"
             tabIndex={0}
@@ -86,64 +91,52 @@ export default function EmployeeList() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') navigate(`/salary-book/employees/${emp.id}`);
             }}
-            className="w-full text-left bg-white rounded-xl border border-emerald-100 p-4"
+            className="cursor-pointer hover:border-emerald-200"
           >
-            <div className="font-semibold text-gray-900">{emp.name}</div>
-            <div className="text-sm text-gray-500">{emp.employee_id}</div>
-            <div className="text-sm text-gray-800 mt-1">{formatINR(emp.monthly_salary)} / month</div>
-            <div className={`text-xs mt-1 ${emp.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
-              {emp.status === 'ACTIVE' ? 'Active' : 'Inactive'}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-slate-900">{emp.name}</div>
+                <div className="text-sm text-slate-500">{emp.employee_id}</div>
+                <div className="text-sm text-slate-800 mt-1 tabular-nums">{formatINR(emp.monthly_salary)} / month</div>
+                {emp.designation ? <div className="text-xs text-slate-500 mt-0.5">{emp.designation}</div> : null}
+              </div>
+              <StatusBadge status={emp.status} />
             </div>
-            <Link
-              to={`/salary-book/employees/${emp.id}`}
-              onClick={(e) => e.stopPropagation()}
-              className="mt-3 inline-flex min-h-10 items-center px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold"
-            >
-              Salary invoice
-            </Link>
-          </div>
+          </SalaryCard>
         ))}
       </div>
 
       {(data?.results.length ?? 0) > 0 && (
-        <div className="hidden lg:block bg-white rounded-xl border border-emerald-100 overflow-hidden">
-          <table className="min-w-full text-sm">
-            <thead className="bg-emerald-50 text-gray-600 text-left">
-              <tr>
-                <th className="px-4 py-3 font-medium">Employee</th>
-                <th className="px-4 py-3 font-medium">ID</th>
-                <th className="px-4 py-3 font-medium">Department</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {data?.results.map((emp) => (
-                <tr
-                  key={emp.id}
-                  className="border-t border-emerald-50 hover:bg-emerald-50/50 cursor-pointer"
-                  onClick={() => navigate(`/salary-book/employees/${emp.id}`)}
-                >
-                  <td className="px-4 py-3 font-medium text-gray-900">{emp.name}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.employee_id}</td>
-                  <td className="px-4 py-3 text-gray-600">{emp.department || '—'}</td>
-                  <td className={`px-4 py-3 ${emp.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
-                    {emp.status === 'ACTIVE' ? 'Active' : 'Inactive'}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Link
-                      to={`/salary-book/employees/${emp.id}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="inline-flex min-h-9 items-center px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
-                    >
-                      Salary invoice
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SalaryTable
+          columns={[
+            { key: 'name', label: 'Employee' },
+            { key: 'id', label: 'ID' },
+            { key: 'designation', label: 'Designation' },
+            { key: 'joined', label: 'Joined' },
+            { key: 'salary', label: 'Salary', align: 'right' },
+            { key: 'status', label: 'Status' },
+          ]}
+        >
+          {data?.results.map((emp) => (
+            <tr
+              key={emp.id}
+              className="hover:bg-slate-50 cursor-pointer"
+              onClick={() => navigate(`/salary-book/employees/${emp.id}`)}
+            >
+              <SalaryTd>
+                <div className="font-medium text-slate-900">{emp.name}</div>
+                <div className="text-xs text-slate-500">{emp.department || '—'}</div>
+              </SalaryTd>
+              <SalaryTd>{emp.employee_id}</SalaryTd>
+              <SalaryTd>{emp.designation || '—'}</SalaryTd>
+              <SalaryTd>{formatDate(emp.date_of_joining)}</SalaryTd>
+              <SalaryTd align="right">{formatINR(emp.monthly_salary)}</SalaryTd>
+              <SalaryTd>
+                <StatusBadge status={emp.status} />
+              </SalaryTd>
+            </tr>
+          ))}
+        </SalaryTable>
       )}
     </div>
   );
