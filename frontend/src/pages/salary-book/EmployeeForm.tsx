@@ -38,6 +38,9 @@ const empty = {
   expected_check_in: '',
   expected_check_out: '',
   check_in_buffer_minutes: '0',
+  overall_late_penalty_enabled: false,
+  overall_late_half_days: '5',
+  overall_late_full_days: '6',
   mtshop_customer: '',
   status: 'ACTIVE',
   notes: '',
@@ -95,6 +98,9 @@ export default function EmployeeForm() {
       expected_check_in: toTimeInput(data.expected_check_in),
       expected_check_out: toTimeInput(data.expected_check_out),
       check_in_buffer_minutes: String(data.check_in_buffer_minutes ?? 0),
+      overall_late_penalty_enabled: Boolean(data.overall_late_penalty_enabled),
+      overall_late_half_days: String(data.overall_late_half_days ?? 5),
+      overall_late_full_days: String(data.overall_late_full_days ?? 6),
       mtshop_customer: data.mtshop_customer ? String(data.mtshop_customer) : '',
       status: data.status,
       notes: data.notes || '',
@@ -112,6 +118,8 @@ export default function EmployeeForm() {
         expected_check_in: form.expected_check_in || null,
         expected_check_out: form.expected_check_out || null,
         check_in_buffer_minutes: Math.min(120, Math.max(0, Number(form.check_in_buffer_minutes) || 0)),
+        overall_late_half_days: Math.min(31, Math.max(1, Number(form.overall_late_half_days) || 5)),
+        overall_late_full_days: Math.min(31, Math.max(2, Number(form.overall_late_full_days) || 6)),
         mtshop_customer: form.mtshop_customer ? Number(form.mtshop_customer) : null,
       };
       if (isEdit) return salaryBookApi.employees.update(Number(id), payload);
@@ -246,6 +254,42 @@ export default function EmployeeForm() {
           Grace after check-in. Example: 10:00 + 10 min → on time until 10:10. Use 0 for exact time.
         </p>
       </div>
+      <label className="lg:col-span-2 flex items-start gap-3 rounded-xl border border-emerald-100 bg-white p-3">
+        <input
+          type="checkbox"
+          className="mt-1 h-4 w-4 accent-emerald-600"
+          checked={form.overall_late_penalty_enabled}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, overall_late_penalty_enabled: e.target.checked }))
+          }
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-900">Overall late salary cut (optional)</span>
+          <span className="block text-xs text-gray-500 mt-0.5">
+            Off unless you turn it on for this employee. Set how many late days cut half a day, and how many cut one full day.
+          </span>
+        </span>
+      </label>
+      {form.overall_late_penalty_enabled && (
+        <>
+          <Input
+            label="Late days for half-day cut"
+            type="number"
+            min={1}
+            max={31}
+            value={form.overall_late_half_days}
+            onChange={(e) => set('overall_late_half_days', e.target.value)}
+          />
+          <Input
+            label="Late days for full-day cut"
+            type="number"
+            min={2}
+            max={31}
+            value={form.overall_late_full_days}
+            onChange={(e) => set('overall_late_full_days', e.target.value)}
+          />
+        </>
+      )}
       {isEdit && (
         <Select label="Status" value={form.status} onChange={(e) => set('status', e.target.value)}>
           <option value="ACTIVE">Active</option>

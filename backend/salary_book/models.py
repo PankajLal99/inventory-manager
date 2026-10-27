@@ -30,6 +30,10 @@ def checkout_photo_upload(instance, filename):
     return _uuid_upload('attendance', filename)
 
 
+def shop_logo_upload(instance, filename):
+    return _uuid_upload('branding', filename)
+
+
 mobile_validator = RegexValidator(
     regex=r'^(\+91)?[6-9]\d{9}$',
     message='Enter a valid 10-digit Indian mobile number.',
@@ -74,6 +78,18 @@ class SalaryBookSettings(models.Model):
     # Can only be changed once; after that machine_time_delta_locked is True.
     machine_time_delta_minutes = models.IntegerField(default=0)
     machine_time_delta_locked = models.BooleanField(default=False)
+    shop_name = models.CharField(max_length=120, default='MANISH TRADERS')
+    shop_tagline = models.TextField(
+        blank=True,
+        default='Mobile Display / Parts Wholesale\nAll India Shipping',
+        help_text='One line per row on the salary invoice.',
+    )
+    shop_logo = models.ImageField(
+        storage=SalaryBookImageStorage(),
+        upload_to=shop_logo_upload,
+        blank=True,
+        null=True,
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -92,6 +108,8 @@ class SalaryBookSettings(models.Model):
         return punch_datetime + timedelta(minutes=delta)
 
     def clean(self):
+        if not (self.shop_name or '').strip():
+            raise ValidationError({'shop_name': 'Shop name is required.'})
         if self.fixed_working_days < 1:
             raise ValidationError({'fixed_working_days': 'Must be at least 1.'})
         if self.max_gps_accuracy_meters < 1:
@@ -189,6 +207,21 @@ class Employee(models.Model):
     fixed_working_days = models.PositiveSmallIntegerField(null=True, blank=True)
     expected_check_in = models.TimeField(null=True, blank=True)
     expected_check_out = models.TimeField(null=True, blank=True)
+    # Optional overall late cut. Day counts are per employee (defaults: 5 half, 6 full).
+    overall_late_penalty_enabled = models.BooleanField(
+        default=False,
+        help_text='When on, late days in the cycle deduct half a day, then one full day at the higher count.',
+    )
+    overall_late_half_days = models.PositiveSmallIntegerField(
+        default=5,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text='Late days in the cycle that deduct half a day salary.',
+    )
+    overall_late_full_days = models.PositiveSmallIntegerField(
+        default=6,
+        validators=[MinValueValidator(2), MaxValueValidator(31)],
+        help_text='Late days in the cycle that deduct one full day salary. Must be higher than the half-day count.',
+    )
     # Grace minutes after expected check-in before counting as late (0 = exact time).
     check_in_buffer_minutes = models.PositiveSmallIntegerField(
         default=0,
@@ -239,6 +272,20 @@ class Employee(models.Model):
         if self.check_in_buffer_minutes is not None and int(self.check_in_buffer_minutes) > 120:
             raise ValidationError(
                 {'check_in_buffer_minutes': 'Buffer cannot exceed 120 minutes.'}
+            )
+        half_days = int(self.overall_late_half_days or 0)
+        full_days = int(self.overall_late_full_days or 0)
+        if not 1 <= half_days <= 31:
+            raise ValidationError(
+                {'overall_late_half_days': 'Half-day late count must be between 1 and 31.'}
+            )
+        if not 2 <= full_days <= 31:
+            raise ValidationError(
+                {'overall_late_full_days': 'Full-day late count must be between 2 and 31.'}
+            )
+        if full_days <= half_days:
+            raise ValidationError(
+                {'overall_late_full_days': 'Full-day late count must be higher than the half-day count.'}
             )
         if self.salary_calculation_method == self.METHOD_FIXED and not self.fixed_working_days:
             raise ValidationError(

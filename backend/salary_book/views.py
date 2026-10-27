@@ -262,6 +262,7 @@ def salary_book_change_password(request):
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def settings_view(request):
     obj = SalaryBookSettings.get_solo()
     if request.method == 'GET':
@@ -277,6 +278,26 @@ def settings_view(request):
         serializer.save()
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def settings_logo(request):
+    obj = SalaryBookSettings.get_solo()
+    if not obj.shop_logo:
+        raise Http404('No logo')
+    try:
+        handle = obj.shop_logo.open('rb')
+    except FileNotFoundError:
+        raise Http404('No logo')
+    name = (obj.shop_logo.name or '').lower()
+    if name.endswith('.png'):
+        content_type = 'image/png'
+    elif name.endswith('.webp'):
+        content_type = 'image/webp'
+    else:
+        content_type = 'image/jpeg'
+    return FileResponse(handle, content_type=content_type)
 
 
 # ---------------------------------------------------------------------------
@@ -1737,7 +1758,18 @@ def attendance_calendar(request):
 
         record, _ = _upsert_draft(emp, period_year, period_month)
         breakdown = record.breakdown if isinstance(record.breakdown, dict) else {}
-        salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
+        slip = breakdown.get('salary_slip') if isinstance(breakdown.get('salary_slip'), dict) else {}
+        if not slip:
+            # Finalized months keep their saved pay figures, but the slip is still shown live.
+            live = calculate_employee_month(emp, period_year, period_month)
+            live_breakdown = live.get('breakdown') if isinstance(live.get('breakdown'), dict) else {}
+            slip = live_breakdown.get('salary_slip') if isinstance(live_breakdown.get('salary_slip'), dict) else {}
+        if slip:
+            salary_generated = slip.get('salary_generated') or '0.00'
+            taken_amount = slip.get('taken_less') or '0.00'
+        else:
+            salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
+            taken_amount = str(record.total_advances)
         payload.append({
             'id': emp.id,
             'name': emp.name,
@@ -1753,8 +1785,9 @@ def attendance_calendar(request):
             'cycle_days': cycle_days,
             'counts': counts,
             'salary_generated': str(salary_generated),
-            'taken': str(record.total_advances),
-            'net_salary': str(record.net_salary),
+            'taken': str(taken_amount),
+            'net_salary': str(slip.get('final_payable') or record.net_salary),
+            'salary_slip': slip or None,
         })
 
     considered = (

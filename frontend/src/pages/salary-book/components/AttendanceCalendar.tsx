@@ -502,11 +502,11 @@ function MobileDayChip({
     bg = 'bg-rose-50 text-rose-600';
     sub = 'Off';
   } else if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
-    if (status === 'HALF_DAY') {
+    if (status === 'HALF_DAY' || cell?.is_late) {
       bg = 'bg-amber-400 text-amber-950';
-      sub = '½';
-    } else if (cell?.is_late) {
-      bg = 'bg-amber-400 text-amber-950';
+      sub = status === 'HALF_DAY' ? '½' : '';
+    } else if (cell?.is_early) {
+      bg = 'bg-orange-500 text-white';
       sub = '';
     } else {
       bg = 'bg-emerald-500 text-white';
@@ -531,27 +531,44 @@ function MobileDayChip({
     sub = style?.short || '';
   }
 
+  const inTime = formatTime24(cell?.check_in_time);
+  const outTime = formatTime24(cell?.check_out_time);
+  const showTimes = Boolean(inTime || outTime);
+
   return (
     <button
       type="button"
       onClick={onSelect}
       title={cellTitle(cell, `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)}
-      className={`relative flex aspect-square w-full flex-col items-center justify-center rounded-lg ${bg} ${
+      className={`relative flex w-full flex-col items-center justify-center rounded-lg px-0.5 py-1 ${
+        showTimes ? 'min-h-[3.35rem]' : 'aspect-square'
+      } ${bg} ${
         isToday && marked ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
       } ${selected ? 'ring-2 ring-emerald-600 ring-offset-1' : ''} focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600`}
-      aria-label={`Day ${day}${sub ? `, ${sub}` : ''}`}
+      aria-label={`Day ${day}${inTime ? `, in ${inTime}` : ''}${outTime ? `, out ${outTime}` : ''}${sub ? `, ${sub}` : ''}`}
       aria-pressed={selected}
     >
       <span className="text-[11px] font-semibold leading-none tabular-nums">{label}</span>
-      {sub && sub !== String(day) && (
-        <span className="mt-0.5 text-[9px] font-bold leading-none opacity-90">{sub}</span>
+      {showTimes ? (
+        <>
+          <span className={`mt-0.5 text-[9px] font-semibold leading-none tabular-nums ${cell?.is_late ? 'underline' : ''}`}>
+            {inTime || '—'}
+          </span>
+          <span className={`mt-0.5 text-[9px] font-semibold leading-none tabular-nums ${cell?.is_early ? 'underline' : ''}`}>
+            {outTime || '—'}
+          </span>
+        </>
+      ) : (
+        sub && sub !== String(day) && (
+          <span className="mt-0.5 text-[9px] font-bold leading-none opacity-90">{sub}</span>
+        )
       )}
       {lateBadge && (
         <span className="absolute right-0.5 top-0.5 text-[8px] font-bold leading-none opacity-90">
           {lateBadge}
         </span>
       )}
-      {status === 'HOLIDAY' && !sub && <Umbrella className="mt-0.5 h-3 w-3" />}
+      {status === 'HOLIDAY' && !sub && !showTimes && <Umbrella className="mt-0.5 h-3 w-3" />}
     </button>
   );
 }
@@ -1144,6 +1161,12 @@ export function AdminMonthGrid({
             ? ` · ${formatCycleBound(emp.period_start, dayList[0])} → ${formatCycleBound(emp.period_end_marker, dayList[dayList.length - 1])}`
             : ''}
         </div>
+      </Link>
+      <Link
+        to={`/salary-book/employees/${emp.id}`}
+        className="shrink-0 inline-flex items-center min-h-9 px-2.5 rounded-full bg-emerald-600 text-white text-xs sm:text-sm font-semibold lg:min-h-10 lg:px-3"
+      >
+        Salary invoice
       </Link>
       {onAddAmount && (
         <button

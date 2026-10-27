@@ -17,6 +17,7 @@ urlpatterns = [
     path('salary-book/dashboard/', views.dashboard, name='salary-book-dashboard'),
     path('salary-book/calendar/', views.attendance_calendar, name='salary-book-calendar'),
     path('salary-book/settings/', views.settings_view, name='salary-book-settings'),
+    path('salary-book/settings/logo/', views.settings_logo, name='salary-book-settings-logo'),
 
     path('salary-book/employees/', views.employee_list_create, name='salary-book-employee-list-create'),
     path('salary-book/employees/<int:pk>/', views.employee_detail, name='salary-book-employee-detail'),

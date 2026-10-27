@@ -6,9 +6,10 @@ import ErrorState from '../../components/ui/ErrorState';
 import { apiError, formatINR, formatDate, formatTime12, monthLabel, periodContaining, statusLabel } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
+import { MonthNav } from './components/AttendanceCalendar';
 import ConfirmDialog from './components/ConfirmDialog';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
+import SalaryInvoice from './components/SalaryInvoice';
 import { toast } from '../../lib/toast';
 
 type Tab = 'profile' | 'attendance' | 'leaves' | 'advances' | 'salaries';
@@ -18,7 +19,7 @@ export default function EmployeeDetails() {
   const empId = Number(id);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>('profile');
+  const [tab, setTab] = useState<Tab>('attendance');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -53,9 +54,16 @@ export default function EmployeeDetails() {
           </p>
         </div>
         <div className="mt-4 lg:mt-0 flex flex-col sm:flex-row gap-2 justify-center">
+          <button
+            type="button"
+            onClick={() => setTab('attendance')}
+            className="flex items-center justify-center min-h-12 px-5 rounded-xl bg-emerald-600 text-white font-medium"
+          >
+            Salary invoice
+          </button>
           <Link
             to={`/salary-book/employees/${data.id}/edit`}
-            className="flex items-center justify-center min-h-12 px-5 rounded-xl bg-emerald-600 text-white font-medium"
+            className="flex items-center justify-center min-h-12 px-5 rounded-xl border border-emerald-200 text-emerald-800 bg-white font-medium"
           >
             Edit Employee
           </Link>
@@ -82,8 +90,8 @@ export default function EmployeeDetails() {
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {([
+          ['attendance', 'Salary invoice'],
           ['profile', 'Profile'],
-          ['attendance', 'Attendance'],
           ['leaves', 'Leaves'],
           ['advances', 'Advances'],
           ['salaries', 'Salary'],
@@ -121,6 +129,14 @@ export default function EmployeeDetails() {
           <Field label="Scheduled hours" value={data.scheduled_hours ? `${data.scheduled_hours} h` : '—'} />
           <Field label="Per-day rate" value={formatINR(data.daily_rate_preview)} />
           <Field label="Per-hour rate" value={formatINR(data.hourly_rate_preview)} />
+          <Field
+            label="Overall late cut"
+            value={
+              data.overall_late_penalty_enabled
+                ? `On · ${data.overall_late_half_days ?? 5} late days = half day, ${data.overall_late_full_days ?? 6} = full day`
+                : 'Off'
+            }
+          />
           <Field label="Start Date" value={formatDate(data.date_of_joining)} />
           <Field
             label="Salary cycle day"
@@ -146,8 +162,8 @@ export default function EmployeeDetails() {
         <AttendanceHistory
           key={`${empId}-${data.date_of_joining}-${data.salary_cycle_start_day || 1}`}
           employeeId={empId}
-          employeeName={data.name}
           cycleDay={data.salary_cycle_start_day}
+          profile={data}
         />
       )}
       {tab === 'leaves' && <LeaveHistory employeeId={empId} />}
@@ -192,14 +208,13 @@ function EmployeeRules({ employeeId }: { employeeId: number }) {
 
 function AttendanceHistory({
   employeeId,
-  employeeName,
   cycleDay,
+  profile,
 }: {
   employeeId: number;
-  employeeName: string;
   cycleDay?: number;
+  profile: Employee;
 }) {
-  const queryClient = useQueryClient();
   const open = useMemo(() => periodContaining(cycleDay), [cycleDay]);
   const [year, setYear] = useState(open.year);
   const [month, setMonth] = useState(open.month);
@@ -208,31 +223,10 @@ function AttendanceHistory({
     setYear(open.year);
     setMonth(open.month);
   }, [open.year, open.month]);
-  const [confirmSettle, setConfirmSettle] = useState(false);
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],
     queryFn: async () =>
       (await salaryBookApi.calendar({ year, month, employee: employeeId })).data as CalendarResponse,
-  });
-  const settle = useMutation({
-    mutationFn: async () =>
-      (await salaryBookApi.employees.settleMonth(employeeId, { year, month, payment_mode: 'CASH' })).data,
-    onSuccess: async (res) => {
-      setConfirmSettle(false);
-      if (res?.already_settled) {
-        toast(`${monthLabel(year, month)} is already settled`, 'success');
-      } else {
-        const adv = Number(res?.advances_marked_paid || 0);
-        toast(
-          adv > 0
-            ? `Settled ${monthLabel(year, month)} · ${adv} advance(s) cleared`
-            : `Settled ${monthLabel(year, month)}`,
-          'success',
-        );
-      }
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
-    },
-    onError: (err) => toast(apiError(err, 'Unable to settle this month.'), 'error'),
   });
   if (isLoading) return <LoadingState message="Loading attendance..." />;
   // Avoid rendering a prior month's strip under the newly selected year/month.
@@ -245,40 +239,14 @@ function AttendanceHistory({
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <MonthNav year={data.year} month={data.month} onChange={(y, m) => { setYear(y); setMonth(m); }} />
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setConfirmSettle(true)}
-            className="inline-flex items-center justify-center min-h-11 px-4 rounded-xl bg-emerald-600 text-white text-sm font-semibold"
-          >
-            Settle {monthLabel(data.year, data.month)}
-          </button>
-          <Link
-            to={`/salary-book/calendar?employee=${employeeId}&year=${data.year}&month=${data.month}`}
-            className="text-sm text-emerald-800 font-medium"
-          >
-            Open full calendar
-          </Link>
-        </div>
+        <Link
+          to={`/salary-book/calendar?employee=${employeeId}&year=${data.year}&month=${data.month}`}
+          className="text-sm text-emerald-800 font-medium"
+        >
+          Open full calendar
+        </Link>
       </div>
-      <KpiStrip kpis={data.kpis} compact />
-      <CalendarLegend />
-      <EmployeeMonthGrid
-        year={data.year}
-        month={data.month}
-        daysInMonth={data.days_in_month}
-        today={data.today}
-        employee={emp}
-      />
-      <ConfirmDialog
-        open={confirmSettle}
-        title={`Settle ${monthLabel(year, month)}?`}
-        message={`This will clear active advances for ${employeeName}'s ${monthLabel(year, month)} cycle, pay any remaining salary, and finalize the month as settled.`}
-        confirmLabel="Settle"
-        loading={settle.isPending}
-        onCancel={() => setConfirmSettle(false)}
-        onConfirm={() => settle.mutate()}
-      />
+      <SalaryInvoice profile={profile} employee={emp} today={data.today} />
     </div>
   );
 }

@@ -10,6 +10,16 @@ import Button from '../../components/ui/Button';
 import { toast } from '../../lib/toast';
 import { apiError, getCurrentGps, gpsUserMessage } from './utils';
 import type { SalaryBookSettings } from './types';
+import { useSalaryBookImage } from './useSalaryBookImage';
+
+const DEFAULT_SHOP_NAME = 'MANISH TRADERS';
+const DEFAULT_TAGLINE = 'Mobile Display / Parts Wholesale\nAll India Shipping';
+
+function shopInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return (parts[0] || 'MT').slice(0, 2).toUpperCase();
+}
 import { auth } from '../../lib/auth';
 import ConfirmDialog from './components/ConfirmDialog';
 import { useSalaryBookTutorialOptional } from './tutorial/SalaryBookTutorial';
@@ -48,6 +58,9 @@ export default function SettingsPage() {
     queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
   const [form, setForm] = useState<SalaryBookSettings | null>(null);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [clearLogo, setClearLogo] = useState(false);
+  const [localLogoPreview, setLocalLogoPreview] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
   const [serverNow, setServerNow] = useState(() => new Date());
   const [deltaConfirmOpen, setDeltaConfirmOpen] = useState(false);
@@ -74,8 +87,30 @@ export default function SettingsPage() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (data) setForm(data);
+    if (data) {
+      setForm({
+        ...data,
+        shop_name: data.shop_name || DEFAULT_SHOP_NAME,
+        shop_tagline: data.shop_tagline ?? DEFAULT_TAGLINE,
+        shop_logo_url: data.shop_logo_url ?? null,
+      });
+      setLogoFile(null);
+      setClearLogo(false);
+    }
   }, [data]);
+
+  useEffect(() => {
+    if (!logoFile) {
+      setLocalLogoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(logoFile);
+    setLocalLogoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [logoFile]);
+
+  const savedLogo = useSalaryBookImage(clearLogo ? null : form?.shop_logo_url);
+  const logoPreview = localLogoPreview || savedLogo;
 
   useEffect(() => {
     const id = window.setInterval(() => setServerNow(new Date()), 1000);
@@ -83,26 +118,39 @@ export default function SettingsPage() {
   }, []);
 
   const mutation = useMutation({
-    mutationFn: async (opts?: { confirmMachineTimeDelta?: boolean }) =>
-      salaryBookApi.settings.update({
-        salary_calculation_method: form?.salary_calculation_method,
+    mutationFn: async (opts?: { confirmMachineTimeDelta?: boolean }) => {
+      const body: Record<string, string | number | boolean> = {
+        salary_calculation_method: form?.salary_calculation_method || 'CALENDAR_DAYS',
         fixed_working_days: Number(form?.fixed_working_days),
         max_gps_accuracy_meters: Number(form?.max_gps_accuracy_meters),
-        office_latitude: form?.office_latitude,
-        office_longitude: form?.office_longitude,
+        office_latitude: String(form?.office_latitude ?? ''),
+        office_longitude: String(form?.office_longitude ?? ''),
         geofence_radius_meters: Number(form?.geofence_radius_meters),
-        require_photo: form?.require_photo,
-        require_checkout_gps_photo: form?.require_checkout_gps_photo,
-        default_check_in: form?.default_check_in,
-        default_check_out: form?.default_check_out,
+        require_photo: Boolean(form?.require_photo),
+        require_checkout_gps_photo: Boolean(form?.require_checkout_gps_photo),
+        default_check_in: form?.default_check_in || '',
+        default_check_out: form?.default_check_out || '',
         machine_time_delta_minutes: Number(form?.machine_time_delta_minutes ?? 0),
+        shop_name: (form?.shop_name || DEFAULT_SHOP_NAME).trim(),
+        shop_tagline: form?.shop_tagline ?? DEFAULT_TAGLINE,
         ...(opts?.confirmMachineTimeDelta ? { confirm_machine_time_delta: true } : {}),
         ...(isAdminUser(user)
-          ? { attendance_capture_mode: form?.attendance_capture_mode }
+          ? { attendance_capture_mode: form?.attendance_capture_mode || 'HARDWARE' }
           : {}),
-      }),
+      };
+      if (clearLogo && !logoFile) body.clear_shop_logo = true;
+      if (!logoFile) return salaryBookApi.settings.update(body);
+      const fd = new FormData();
+      Object.entries(body).forEach(([key, value]) => {
+        fd.append(key, typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value));
+      });
+      fd.append('shop_logo', logoFile);
+      return salaryBookApi.settings.update(fd);
+    },
     onSuccess: async () => {
       setDeltaConfirmOpen(false);
+      setLogoFile(null);
+      setClearLogo(false);
       toast('Settings saved', 'success');
       await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
     },
@@ -171,6 +219,72 @@ export default function SettingsPage() {
       }}
     >
       <h1 className="text-xl lg:text-2xl font-bold">Settings</h1>
+      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3">
+        <div>
+          <h2 className="font-semibold text-gray-900">Salary invoice header</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Shop name, logo, and tagline appear on the salary invoice employees receive.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)] gap-4 items-start">
+          <div className="flex flex-col items-start gap-2">
+            {logoPreview ? (
+              <img src={logoPreview} alt="" className="h-16 w-16 rounded-lg object-cover border border-gray-200 bg-white" />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-black text-amber-300 font-black">
+                {shopInitials(form.shop_name || DEFAULT_SHOP_NAME)}
+              </div>
+            )}
+            <label className="inline-flex min-h-10 cursor-pointer items-center rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700">
+              {logoPreview ? 'Change logo' : 'Upload logo'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setLogoFile(file);
+                  if (file) setClearLogo(false);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            {(logoPreview || form.shop_logo_url) && !clearLogo ? (
+              <button
+                type="button"
+                className="text-xs font-medium text-red-600"
+                onClick={() => {
+                  setLogoFile(null);
+                  setClearLogo(true);
+                }}
+              >
+                Remove logo
+              </button>
+            ) : null}
+          </div>
+          <div className="space-y-3">
+            <Input
+              label="Shop name"
+              value={form.shop_name || ''}
+              maxLength={120}
+              onChange={(e) => setForm({ ...form, shop_name: e.target.value })}
+            />
+            <div>
+              <label htmlFor="shop-tagline" className="block text-sm font-medium text-gray-700 mb-1">
+                Tagline
+              </label>
+              <textarea
+                id="shop-tagline"
+                rows={3}
+                value={form.shop_tagline || ''}
+                onChange={(e) => setForm({ ...form, shop_tagline: e.target.value })}
+                className="block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">Each line shows on its own row. Two lines work best.</p>
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <Select
         label="Salary Calculation Method"

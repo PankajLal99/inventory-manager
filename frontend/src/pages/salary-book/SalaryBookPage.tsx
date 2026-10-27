@@ -101,12 +101,20 @@ export default function SalaryBookPage() {
                   <span>{formatINR(row.net_salary)}</span>
                 </div>
                 <div className="text-xs text-gray-500">{statusLabel(row.payment_status)} · {row.status}</div>
-                <Link
-                  to={`/salary-book/salaries/${row.id}`}
-                  className="mt-2 flex items-center justify-center min-h-11 rounded-xl border border-emerald-200 text-emerald-800 font-medium"
-                >
-                  View Details
-                </Link>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <Link
+                    to={`/salary-book/employees/${row.employee}`}
+                    className="flex items-center justify-center min-h-11 rounded-xl bg-emerald-600 text-white font-semibold"
+                  >
+                    Salary invoice
+                  </Link>
+                  <Link
+                    to={`/salary-book/salaries/${row.id}`}
+                    className="flex items-center justify-center min-h-11 rounded-xl border border-emerald-200 text-emerald-800 font-medium"
+                  >
+                    View Details
+                  </Link>
+                </div>
               </div>
             ))}
           </div>
@@ -154,8 +162,14 @@ export default function SalaryBookPage() {
                       </td>
                       <td className="px-4 py-3 font-semibold">{formatINR(row.net_salary)}</td>
                       <td className="px-4 py-3">{statusLabel(row.payment_status)}</td>
-                      <td className="px-4 py-3">
-                        <Link to={`/salary-book/salaries/${row.id}`} className="text-emerald-800 font-medium">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <Link
+                          to={`/salary-book/employees/${row.employee}`}
+                          className="inline-flex min-h-9 items-center px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
+                        >
+                          Salary invoice
+                        </Link>
+                        <Link to={`/salary-book/salaries/${row.id}`} className="ml-3 text-emerald-800 font-medium">
                           Details
                         </Link>
                       </td>

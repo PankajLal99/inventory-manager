@@ -28,6 +28,7 @@ class SalaryBookSettingsAdmin(admin.ModelAdmin):
         'attendance_capture_mode',
         'require_gps',
         'require_photo',
+        'shop_name',
         'updated_at',
     ]
 

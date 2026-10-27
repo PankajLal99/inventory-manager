@@ -22,6 +22,7 @@ import ManualAttendanceDialog, {
 } from './components/ManualAttendanceDialog';
 import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
 import TakenHistoryByDate from './components/TakenHistoryByDate';
+import SalarySlipCard from './components/SalarySlipCard';
 import { apiError, cyclePeriodLabel, periodContaining, toTimeInput } from './utils';
 
 export default function CalendarPage() {
@@ -394,6 +395,7 @@ export default function CalendarPage() {
                 </div>
               </div>
             </div>
+            <SalarySlipCard employee={selectedEmployee} today={data.today} />
             <TakenHistoryByDate
               employeeId={selectedEmployee.id}
               employeeName={selectedEmployee.name}
@@ -425,9 +427,9 @@ export default function CalendarPage() {
             <Row label="Unmarked" value={selectedEmployee.counts.unmarked} />
             <Link
               to={`/salary-book/employees/${selectedEmployee.id}`}
-              className="mt-3 flex items-center justify-center min-h-11 rounded-xl border border-emerald-200 text-emerald-800 font-medium"
+              className="mt-3 flex items-center justify-center min-h-11 rounded-xl bg-emerald-600 text-white font-semibold"
             >
-              Open profile
+              Salary invoice
             </Link>
           </div>
         </div>

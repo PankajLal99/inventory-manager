@@ -1,4 +1,5 @@
 import calendar
+import re
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -19,6 +20,8 @@ from backend.salary_book.services.schedule_utils import (
     ZERO,
     _q,
     hours_from_minutes,
+    minutes_early_at,
+    minutes_late_at,
     payable_minutes,
     scheduled_hours,
     scheduled_minutes,
@@ -231,8 +234,268 @@ def _day_credit(row: Attendance | None, employee: Employee, daily: Decimal, sche
     return _q(credit, FOUR)
 
 
+def overall_late_day_counts(employee: Employee) -> tuple[int, int]:
+    """Per-employee late-day counts. Defaults are 5 (half day) and 6 (full day)."""
+    try:
+        half = int(getattr(employee, 'overall_late_half_days', 5) or 5)
+    except (TypeError, ValueError):
+        half = 5
+    try:
+        full = int(getattr(employee, 'overall_late_full_days', 6) or 6)
+    except (TypeError, ValueError):
+        full = 6
+    half = max(1, min(31, half))
+    full = max(half + 1, min(31, full))
+    return half, full
+
+_INVOICE_NOISE = re.compile(r'(?i)\b(?:credit\s+)?invoice\b[:#\-]?\s*\S*')
+
+
+def _slip_date(day: date) -> str:
+    return day.strftime('%d/%m/%y')
+
+
+def _item_product_name(item) -> str:
+    product = getattr(item, 'product', None)
+    if product is not None and getattr(product, 'name', None):
+        return str(product.name).strip()
+    variant = getattr(item, 'variant', None)
+    if variant is not None and getattr(variant, 'name', None):
+        return str(variant.name).strip()
+    named = getattr(item, 'product_name', None)
+    if named and str(named).strip():
+        return str(named).strip()
+    return 'Product'
+
+
+def _clean_product_label(reason: str, invoice_number: str) -> str:
+    text = reason or ''
+    if invoice_number:
+        text = text.replace(invoice_number, ' ')
+    text = _INVOICE_NOISE.sub(' ', text)
+    text = ' '.join(text.split()).strip(' -–:')
+    return text or 'Product'
+
+
+def _scale_to_total(parts: list[tuple[str, Decimal]], total: Decimal) -> list[tuple[str, Decimal]]:
+    """Split `total` across named parts. Last line absorbs rounding."""
+    if not parts:
+        return []
+    if len(parts) == 1:
+        return [(parts[0][0], _q(total))]
+    weight = sum((amount for _, amount in parts), ZERO)
+    if weight <= ZERO:
+        share = _q(total / Decimal(len(parts)))
+        scaled = [(name, share) for name, _ in parts[:-1]]
+        used = sum((amount for _, amount in scaled), ZERO)
+        scaled.append((parts[-1][0], _q(total - used)))
+        return [(name, amount) for name, amount in scaled if amount > ZERO]
+    scaled = []
+    used = ZERO
+    for index, (name, amount) in enumerate(parts):
+        if index == len(parts) - 1:
+            part = _q(total - used)
+        else:
+            part = _q(total * amount / weight)
+            used += part
+        if part > ZERO:
+            scaled.append((name, part))
+    return scaled
+
+
+def _invoice_product_amounts(invoice_number: str, advance_amount: Decimal) -> list[tuple[str, Decimal]]:
+    """Product names from the system invoice. Never returns the invoice number."""
+    number = (invoice_number or '').strip()
+    if not number:
+        return []
+    from backend.pos.models import InvoiceItem
+
+    items = list(
+        InvoiceItem.objects.filter(invoice__invoice_number=number).select_related('product', 'variant')
+    )
+    if not items:
+        from backend.credit.models import CreditInvoiceItem
+
+        items = list(
+            CreditInvoiceItem.objects.filter(invoice__invoice_number=number).select_related('product')
+        )
+    if not items:
+        return []
+    parts = []
+    for item in items:
+        line = Decimal(str(getattr(item, 'line_total', 0) or 0))
+        if line < ZERO:
+            line = abs(line)
+        parts.append((_item_product_name(item) or 'Product', line))
+    return _scale_to_total(parts, advance_amount)
+
+
+def _advance_cut_lines(advance: SalaryAdvance) -> list[tuple[str, str, Decimal]]:
+    """Return (kind, description, amount) rows for one active advance."""
+    amount = _q(advance.amount)
+    number = (advance.source_invoice_number or '').strip()
+    if advance.source == SalaryAdvance.SOURCE_MTSHOP or number:
+        products = _invoice_product_amounts(number, amount)
+        if products:
+            return [('PRODUCT', name, part) for name, part in products]
+        return [('PRODUCT', _clean_product_label(advance.reason, number), amount)]
+    mode = (advance.payment_mode or '').upper()
+    if mode == SalaryAdvance.MODE_UPI:
+        return [('ONLINE', 'ONLINE LIYA', amount)]
+    return [('CASH', 'CASH LIYA', amount)]
+
+
+def build_salary_slip(
+    employee: Employee,
+    *,
+    today: date,
+    daily: Decimal,
+    gross: Decimal,
+    sched_mins: int,
+    paid_start: date,
+    paid_end: date,
+    period_end_marker: date,
+    rows: dict,
+) -> dict:
+    """
+    Salary-less ledger for one cycle.
+
+    Open cycle (today still inside it): salary so far is only days already
+    worked, so the morning after payday the boxes are 0 until new punches
+    or amounts arrive. A closed cycle uses full monthly salary as the base.
+    """
+    if today < paid_start:
+        period_open = True
+        scan_end = paid_start - timedelta(days=1)
+    elif today > period_end_marker:
+        period_open = False
+        scan_end = paid_end
+    else:
+        period_open = True
+        scan_end = min(today, paid_end)
+
+    per_minute = (daily / Decimal(sched_mins)) if sched_mins > 0 else ZERO
+    punch_lines = []
+    late_days = 0
+    accrued = ZERO
+    cursor = paid_start
+    while cursor <= scan_end:
+        row = rows.get(cursor)
+        if row is not None:
+            if row.status == Attendance.STATUS_PRESENT:
+                accrued += daily
+            elif row.status == Attendance.STATUS_HALF_DAY:
+                accrued += daily * HALF
+            elif row.status in (Attendance.STATUS_PAID_LEAVE, Attendance.STATUS_HOLIDAY):
+                accrued += daily
+            late = minutes_late_at(row.check_in_time, employee, row.date) if row.check_in_time else 0
+            early = minutes_early_at(row.check_out_time, employee, row.date) if row.check_out_time else 0
+            if late > 0:
+                late_days += 1
+            day_room = daily
+            if late > 0 and per_minute > ZERO:
+                cut = _q(min(day_room, per_minute * Decimal(late)))
+                if cut > ZERO:
+                    day_room -= cut
+                    punch_lines.append({
+                        'date': cursor.isoformat(),
+                        'date_label': _slip_date(cursor),
+                        'kind': 'LATE_IN',
+                        'description': f'LATE IN SALARY LESS ({late} min)',
+                        'minutes': late,
+                        'amount': str(cut),
+                    })
+            if early > 0 and per_minute > ZERO and day_room > ZERO:
+                cut = _q(min(day_room, per_minute * Decimal(early)))
+                if cut > ZERO:
+                    punch_lines.append({
+                        'date': cursor.isoformat(),
+                        'date_label': _slip_date(cursor),
+                        'kind': 'EARLY_OUT',
+                        'description': f'BEFORE TIME OUT SALARY LESS ({early} min)',
+                        'minutes': early,
+                        'amount': str(cut),
+                    })
+        cursor += timedelta(days=1)
+
+    penalty_lines = []
+    half_days, full_days = overall_late_day_counts(employee)
+    if getattr(employee, 'overall_late_penalty_enabled', False):
+        if late_days >= full_days:
+            penalty_lines.append({
+                'date': None,
+                'date_label': '',
+                'kind': 'OVERALL_FULL',
+                'description': f'OVERALL {full_days} DAY LATE SALARY LESS',
+                'minutes': 0,
+                'amount': str(_q(daily)),
+            })
+        elif late_days >= half_days:
+            penalty_lines.append({
+                'date': None,
+                'date_label': '',
+                'kind': 'OVERALL_HALF',
+                'description': f'OVERALL {half_days} DAY LATE SALARY LESS',
+                'minutes': 0,
+                'amount': str(_q(daily * HALF)),
+            })
+
+    money_lines = []
+    advances = SalaryAdvance.objects.filter(
+        employee=employee,
+        status=SalaryAdvance.STATUS_ACTIVE,
+        date__gte=paid_start,
+        date__lte=paid_end,
+    ).order_by('date', 'id')
+    for advance in advances:
+        for kind, description, amount in _advance_cut_lines(advance):
+            if amount <= ZERO:
+                continue
+            money_lines.append({
+                'date': advance.date.isoformat(),
+                'date_label': _slip_date(advance.date),
+                'kind': kind,
+                'description': description,
+                'minutes': 0,
+                'amount': str(_q(amount)),
+            })
+
+    lines = punch_lines + penalty_lines + money_lines
+    time_less = _q(sum(
+        (Decimal(line['amount']) for line in punch_lines + penalty_lines),
+        ZERO,
+    ))
+    taken_less = _q(sum((Decimal(line['amount']) for line in money_lines), ZERO))
+    total_less = _q(time_less + taken_less)
+    base = accrued if period_open else gross
+    total_salary = _q(max(ZERO, base))
+    # Time cuts come out of salary generated; cash / products stay in Taken.
+    salary_generated = _q(max(ZERO, total_salary - time_less))
+    final_payable = _q(salary_generated - taken_less)
+    fresh_cycle = period_open and salary_generated == ZERO and taken_less == ZERO
+
+    return {
+        'lines': lines,
+        'total_less': str(total_less),
+        'monthly_salary': str(gross),
+        'daily_salary': str(_q(daily)),
+        'total_salary': str(total_salary),
+        'time_less': str(time_less),
+        'taken_less': str(taken_less),
+        'salary_generated': str(salary_generated),
+        'final_payable': str(final_payable),
+        'period_open': period_open,
+        'fresh_cycle': fresh_cycle,
+        'late_days': late_days,
+        'overall_late_penalty_enabled': bool(getattr(employee, 'overall_late_penalty_enabled', False)),
+        'overall_late_half_days': half_days,
+        'overall_late_full_days': full_days,
+    }
+
+
 def calculate_employee_month(employee: Employee, year: int, month: int, today=None):
     """Return a transparent salary breakdown. Never called from the frontend."""
+    today = today or timezone.localdate()
     settings_obj = SalaryBookSettings.get_solo()
     method, fixed_days = effective_method(employee, settings_obj)
     divisor = divisor_for(year, month, method, fixed_days, employee=employee)
@@ -330,6 +593,18 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
             'are unpaid.',
         )
 
+    salary_slip = build_salary_slip(
+        employee,
+        today=today,
+        daily=daily,
+        gross=gross,
+        sched_mins=sched_mins,
+        paid_start=start,
+        paid_end=end,
+        period_end_marker=end_marker,
+        rows=rows,
+    )
+
     breakdown = {
         'employee_id': employee.employee_id,
         'employee_name': employee.name,
@@ -362,6 +637,7 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'total_advances': str(total_advances),
         'net_salary': str(net),
         'daily_breakdown': daily_breakdown,
+        'salary_slip': salary_slip,
         'notes': notes,
     }
 

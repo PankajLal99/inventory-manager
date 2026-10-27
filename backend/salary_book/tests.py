@@ -1776,3 +1776,231 @@ class CalendarTakenAndAttendanceEditTests(SalaryBookMixin, APITestCase):
         self.assertEqual(att.status, Attendance.STATUS_ABSENT)
         self.assertIsNone(att.check_in_time)
         self.assertIsNone(att.check_out_time)
+
+
+class SalarySlipTests(SalaryBookMixin, APITestCase):
+    """Late-in, early-out, optional 5/6-day cut, and product names on the salary slip."""
+
+    def setUp(self):
+        self.user = self.make_user('owner')
+        self.client.force_authenticate(user=self.user)
+        self.emp = self.make_employee(
+            name='Ajay',
+            employee_id='EMP-SLIP',
+            monthly_salary=Decimal('24000.00'),
+            salary_calculation_method=Employee.METHOD_FIXED,
+            fixed_working_days=30,
+            expected_check_in=time(9, 0),
+            expected_check_out=time(17, 0),
+            date_of_joining=date(2026, 1, 1),
+            salary_cycle_start_day=1,
+        )
+
+    def _punch(self, day, in_h, in_m, out_h, out_m):
+        return Attendance.objects.create(
+            employee=self.emp,
+            date=day,
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(day, in_h, in_m),
+            check_out_time=_local_dt(day, out_h, out_m),
+            attendance_method=Attendance.METHOD_MANUAL,
+        )
+
+    def _slip(self, year, month, today):
+        calc = calculate_employee_month(self.emp, year, month, today=today)
+        return calc['breakdown']['salary_slip']
+
+    def test_late_in_and_early_out_amounts(self):
+        # 9:00–17:00 is 480 minutes. Daily = 24000/30 = 800. Per minute = 800/480.
+        # 30 min late = 50. 60 min early = 100.
+        self._punch(date(2026, 10, 12), 9, 30, 16, 0)
+        slip = self._slip(2026, 10, date(2026, 11, 1))
+        kinds = [line['kind'] for line in slip['lines']]
+        self.assertEqual(kinds, ['LATE_IN', 'EARLY_OUT'])
+        self.assertEqual(slip['lines'][0]['date_label'], '12/10/26')
+        self.assertIn('30 min', slip['lines'][0]['description'])
+        self.assertEqual(Decimal(slip['lines'][0]['amount']), Decimal('50.00'))
+        self.assertIn('60 min', slip['lines'][1]['description'])
+        self.assertEqual(Decimal(slip['lines'][1]['amount']), Decimal('100.00'))
+        self.assertNotIn('OVERALL', ' '.join(line['description'] for line in slip['lines']))
+
+    def test_on_time_inside_buffer_is_not_a_less_line(self):
+        self.emp.check_in_buffer_minutes = 10
+        self.emp.save(update_fields=['check_in_buffer_minutes'])
+        self._punch(date(2026, 10, 12), 9, 10, 17, 0)
+        slip = self._slip(2026, 10, date(2026, 11, 1))
+        self.assertEqual(slip['lines'], [])
+
+    def test_overall_cut_is_optional(self):
+        for offset in range(6):
+            day = date(2026, 10, 1) + timedelta(days=offset)
+            self._punch(day, 9, 40, 17, 0)
+        off = self._slip(2026, 10, date(2026, 11, 1))
+        self.assertFalse(any(line['kind'].startswith('OVERALL') for line in off['lines']))
+
+        self.emp.overall_late_penalty_enabled = True
+        self.emp.save(update_fields=['overall_late_penalty_enabled'])
+        # 6 late days → one full day, not also the half-day line.
+        on = self._slip(2026, 10, date(2026, 11, 1))
+        overall = [line for line in on['lines'] if line['kind'].startswith('OVERALL')]
+        self.assertEqual(len(overall), 1)
+        self.assertEqual(overall[0]['kind'], 'OVERALL_FULL')
+        self.assertEqual(Decimal(overall[0]['amount']), Decimal('800.00'))
+
+        Attendance.objects.filter(employee=self.emp, date=date(2026, 10, 6)).delete()
+        five = self._slip(2026, 10, date(2026, 11, 1))
+        overall = [line for line in five['lines'] if line['kind'].startswith('OVERALL')]
+        self.assertEqual(len(overall), 1)
+        self.assertEqual(overall[0]['kind'], 'OVERALL_HALF')
+        self.assertEqual(overall[0]['description'], 'OVERALL 5 DAY LATE SALARY LESS')
+        self.assertEqual(Decimal(overall[0]['amount']), Decimal('400.00'))
+
+        self.emp.overall_late_half_days = 3
+        self.emp.overall_late_full_days = 4
+        self.emp.save(update_fields=['overall_late_half_days', 'overall_late_full_days'])
+        custom = self._slip(2026, 10, date(2026, 11, 1))
+        overall = [line for line in custom['lines'] if line['kind'].startswith('OVERALL')]
+        self.assertEqual(len(overall), 1)
+        self.assertEqual(overall[0]['kind'], 'OVERALL_FULL')
+        self.assertEqual(overall[0]['description'], 'OVERALL 4 DAY LATE SALARY LESS')
+
+    def test_cash_online_and_product_name(self):
+        from backend.catalog.models import Product
+        from backend.locations.models import Store
+        from backend.pos.models import Invoice, InvoiceItem
+
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 10, 18),
+            amount=Decimal('2000.00'),
+            reason='Cash',
+            payment_mode=SalaryAdvance.MODE_CASH,
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 10, 20),
+            amount=Decimal('500.00'),
+            reason='UPI',
+            payment_mode=SalaryAdvance.MODE_UPI,
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        store = Store.objects.create(name='Shop', code='SLIP-SHOP')
+        product = Product.objects.create(name='FOLDER A3S', sku='SLIP-A3S')
+        invoice = Invoice.objects.create(
+            invoice_number='INV-SLIP-1',
+            store=store,
+            invoice_type='credit',
+            status='credit',
+            total=Decimal('1500.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('1500.00'),
+            line_total=Decimal('1500.00'),
+        )
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 10, 22),
+            amount=Decimal('1500.00'),
+            reason='Credit Invoice INV-SLIP-1',
+            source=SalaryAdvance.SOURCE_MTSHOP,
+            source_invoice_number='INV-SLIP-1',
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        slip = self._slip(2026, 10, date(2026, 11, 1))
+        by_kind = {line['kind']: line for line in slip['lines']}
+        self.assertEqual(by_kind['CASH']['description'], 'CASH LIYA')
+        self.assertEqual(Decimal(by_kind['CASH']['amount']), Decimal('2000.00'))
+        self.assertEqual(by_kind['ONLINE']['description'], 'ONLINE LIYA')
+        self.assertEqual(by_kind['PRODUCT']['description'], 'FOLDER A3S')
+        self.assertNotIn('INV-SLIP-1', by_kind['PRODUCT']['description'])
+        self.assertEqual(Decimal(by_kind['PRODUCT']['amount']), Decimal('1500.00'))
+        # Closed cycle: final is monthly salary minus every less line.
+        self.assertEqual(Decimal(slip['total_salary']), Decimal('24000.00'))
+        self.assertEqual(Decimal(slip['final_payable']), Decimal('20000.00'))
+
+    def test_day_after_payday_starts_at_zero_and_keeps_history(self):
+        self.emp.salary_cycle_start_day = 15
+        self.emp.date_of_joining = date(2026, 1, 15)
+        self.emp.save(update_fields=['salary_cycle_start_day', 'date_of_joining'])
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 10, 10),
+            amount=Decimal('700.00'),
+            payment_mode=SalaryAdvance.MODE_CASH,
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        fresh = self._slip(2026, 11, date(2026, 10, 16))
+        self.assertTrue(fresh['period_open'])
+        self.assertTrue(fresh['fresh_cycle'])
+        self.assertEqual(fresh['lines'], [])
+        self.assertEqual(Decimal(fresh['salary_generated']), Decimal('0.00'))
+        self.assertEqual(Decimal(fresh['taken_less']), Decimal('0.00'))
+        self.assertEqual(Decimal(fresh['final_payable']), Decimal('0.00'))
+
+        previous = self._slip(2026, 10, date(2026, 10, 16))
+        self.assertFalse(previous['period_open'])
+        self.assertEqual(Decimal(previous['taken_less']), Decimal('700.00'))
+        self.assertEqual(previous['lines'][0]['description'], 'CASH LIYA')
+
+
+class InvoiceBrandingTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('brand-owner')
+        self.client.force_authenticate(user=self.user)
+
+    def test_shop_name_tagline_and_logo(self):
+        url = reverse('salary-book-settings')
+        logo_url = reverse('salary-book-settings-logo')
+        current = self.client.get(url)
+        self.assertEqual(current.status_code, status.HTTP_200_OK)
+        self.assertEqual(current.data['shop_name'], 'MANISH TRADERS')
+        self.assertIn('Mobile Display / Parts Wholesale', current.data['shop_tagline'])
+        self.assertIsNone(current.data['shop_logo_url'])
+
+        missing = self.client.get(logo_url)
+        self.assertEqual(missing.status_code, status.HTTP_404_NOT_FOUND)
+
+        empty = self.client.patch(url, {'shop_name': '   '}, format='json')
+        self.assertEqual(empty.status_code, status.HTTP_400_BAD_REQUEST)
+
+        renamed = self.client.patch(
+            url,
+            {
+                'shop_name': 'Ankit Stores',
+                'shop_tagline': 'Mobile Display / Parts Wholesale\nAll India Shipping',
+            },
+            format='json',
+        )
+        self.assertEqual(renamed.status_code, status.HTTP_200_OK)
+        self.assertEqual(renamed.data['shop_name'], 'Ankit Stores')
+        self.assertEqual(
+            renamed.data['shop_tagline'],
+            'Mobile Display / Parts Wholesale\nAll India Shipping',
+        )
+
+        uploaded = self.client.patch(
+            url,
+            {'shop_logo': jpeg_file('logo.jpg')},
+            format='multipart',
+        )
+        self.assertEqual(uploaded.status_code, status.HTTP_200_OK)
+        self.assertEqual(uploaded.data['shop_logo_url'], '/salary-book/settings/logo/')
+        self.assertEqual(uploaded.data['shop_name'], 'Ankit Stores')
+
+        logo = self.client.get(logo_url)
+        self.assertEqual(logo.status_code, status.HTTP_200_OK)
+        self.assertEqual(logo['Content-Type'], 'image/jpeg')
+
+        cleared = self.client.patch(url, {'clear_shop_logo': True}, format='json')
+        self.assertEqual(cleared.status_code, status.HTTP_200_OK)
+        self.assertIsNone(cleared.data['shop_logo_url'])
+        self.assertEqual(self.client.get(logo_url).status_code, status.HTTP_404_NOT_FOUND)

@@ -78,10 +78,14 @@ export default function EmployeeList() {
 
       <div className="space-y-3 lg:hidden">
         {data?.results.map((emp) => (
-          <button
+          <div
             key={emp.id}
-            type="button"
+            role="link"
+            tabIndex={0}
             onClick={() => navigate(`/salary-book/employees/${emp.id}`)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') navigate(`/salary-book/employees/${emp.id}`);
+            }}
             className="w-full text-left bg-white rounded-xl border border-emerald-100 p-4"
           >
             <div className="font-semibold text-gray-900">{emp.name}</div>
@@ -90,7 +94,14 @@ export default function EmployeeList() {
             <div className={`text-xs mt-1 ${emp.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
               {emp.status === 'ACTIVE' ? 'Active' : 'Inactive'}
             </div>
-          </button>
+            <Link
+              to={`/salary-book/employees/${emp.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-3 inline-flex min-h-10 items-center px-3 rounded-lg bg-emerald-600 text-white text-sm font-semibold"
+            >
+              Salary invoice
+            </Link>
+          </div>
         ))}
       </div>
 
@@ -103,6 +114,7 @@ export default function EmployeeList() {
                 <th className="px-4 py-3 font-medium">ID</th>
                 <th className="px-4 py-3 font-medium">Department</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium" />
               </tr>
             </thead>
             <tbody>
@@ -117,6 +129,15 @@ export default function EmployeeList() {
                   <td className="px-4 py-3 text-gray-600">{emp.department || '—'}</td>
                   <td className={`px-4 py-3 ${emp.status === 'ACTIVE' ? 'text-emerald-700' : 'text-gray-500'}`}>
                     {emp.status === 'ACTIVE' ? 'Active' : 'Inactive'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <Link
+                      to={`/salary-book/employees/${emp.id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex min-h-9 items-center px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
+                    >
+                      Salary invoice
+                    </Link>
                   </td>
                 </tr>
               ))}

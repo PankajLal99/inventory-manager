@@ -18,6 +18,10 @@ export interface Employee {
   expected_check_out: string | null;
   /** Grace minutes after expected check-in before counting late (0 = exact). */
   check_in_buffer_minutes: number;
+  /** 5 late days → half day cut; 6 or more → one full day, unless this employee uses other counts. Off unless turned on in edit. */
+  overall_late_penalty_enabled?: boolean;
+  overall_late_half_days?: number;
+  overall_late_full_days?: number;
   effective_check_in: string | null;
   effective_check_out: string | null;
   scheduled_hours: string;
@@ -208,6 +212,9 @@ export interface SalaryBookSettings {
   default_check_out: string;
   machine_time_delta_minutes: number;
   machine_time_delta_locked?: boolean;
+  shop_name: string;
+  shop_tagline: string;
+  shop_logo_url: string | null;
 }
 
 export interface GpsFix {
@@ -273,6 +280,34 @@ export interface CalendarEmployee {
   salary_generated?: string;
   taken?: string;
   net_salary?: string;
+  salary_slip?: SalarySlip | null;
+}
+
+export interface SalarySlipLine {
+  date: string | null;
+  date_label: string;
+  kind: string;
+  description: string;
+  minutes: number;
+  amount: string;
+}
+
+export interface SalarySlip {
+  lines: SalarySlipLine[];
+  total_less: string;
+  monthly_salary: string;
+  daily_salary: string;
+  total_salary: string;
+  time_less: string;
+  taken_less: string;
+  salary_generated: string;
+  final_payable: string;
+  period_open: boolean;
+  fresh_cycle: boolean;
+  late_days: number;
+  overall_late_penalty_enabled: boolean;
+  overall_late_half_days: number;
+  overall_late_full_days: number;
 }
 
 export interface CalendarKpis {

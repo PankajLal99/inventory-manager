@@ -27,6 +27,8 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
     confirm_machine_time_delta = serializers.BooleanField(
         required=False, write_only=True, default=False
     )
+    clear_shop_logo = serializers.BooleanField(required=False, write_only=True, default=False)
+    shop_logo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = SalaryBookSettings
@@ -47,9 +49,22 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             'machine_time_delta_minutes',
             'machine_time_delta_locked',
             'confirm_machine_time_delta',
+            'shop_name',
+            'shop_tagline',
+            'shop_logo',
+            'shop_logo_url',
+            'clear_shop_logo',
             'updated_at',
         ]
-        read_only_fields = ['id', 'updated_at', 'machine_time_delta_locked']
+        read_only_fields = ['id', 'updated_at', 'machine_time_delta_locked', 'shop_logo_url']
+        extra_kwargs = {
+            'shop_logo': {'required': False, 'allow_null': True, 'write_only': True},
+        }
+
+    def get_shop_logo_url(self, obj):
+        if not obj.shop_logo:
+            return None
+        return '/salary-book/settings/logo/'
 
     def validate(self, attrs):
         cin = attrs.get('default_check_in', getattr(self.instance, 'default_check_in', None))
@@ -87,10 +102,42 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
                             )
                         }
                     )
+        if 'shop_name' in attrs:
+            name = str(attrs.get('shop_name') or '').strip()
+            if not name:
+                raise serializers.ValidationError({'shop_name': 'Shop name is required.'})
+            if len(name) > 120:
+                raise serializers.ValidationError({'shop_name': 'Shop name must be 120 characters or fewer.'})
+            attrs['shop_name'] = name
+        if 'shop_tagline' in attrs:
+            raw = str(attrs.get('shop_tagline') or '').replace('\r\n', '\n')
+            lines = [line.strip() for line in raw.split('\n')]
+            lines = [line for line in lines if line]
+            if len(lines) > 4:
+                raise serializers.ValidationError({'shop_tagline': 'Use at most 4 lines.'})
+            if any(len(line) > 80 for line in lines):
+                raise serializers.ValidationError(
+                    {'shop_tagline': 'Each tagline line must be 80 characters or fewer.'}
+                )
+            attrs['shop_tagline'] = '\n'.join(lines)
+        logo = attrs.get('shop_logo')
+        if logo:
+            if getattr(logo, 'size', 0) > 2 * 1024 * 1024:
+                raise serializers.ValidationError({'shop_logo': 'Logo must be 2 MB or smaller.'})
+            content_type = getattr(logo, 'content_type', '') or ''
+            if content_type not in {'image/jpeg', 'image/png', 'image/webp'}:
+                raise serializers.ValidationError({'shop_logo': 'Use a JPG, PNG, or WebP logo.'})
         return attrs
 
     def update(self, instance, validated_data):
         confirm = bool(validated_data.pop('confirm_machine_time_delta', False))
+        clear_logo = bool(validated_data.pop('clear_shop_logo', False))
+        if clear_logo and 'shop_logo' not in validated_data:
+            if instance.shop_logo:
+                instance.shop_logo.delete(save=False)
+            instance.shop_logo = None
+        elif validated_data.get('shop_logo') is not None and instance.shop_logo:
+            instance.shop_logo.delete(save=False)
 
         if 'attendance_capture_mode' in validated_data:
             mode = validated_data['attendance_capture_mode']
@@ -166,6 +213,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'fixed_working_days',
             'expected_check_in',
             'expected_check_out',
+            'overall_late_penalty_enabled',
+            'overall_late_half_days',
+            'overall_late_full_days',
             'check_in_buffer_minutes',
             'effective_check_in',
             'effective_check_out',
@@ -246,6 +296,22 @@ class EmployeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Must be between 1 and 31.')
         return int(value)
 
+    def validate_overall_late_half_days(self, value):
+        if value is None:
+            return 5
+        value = int(value)
+        if not 1 <= value <= 31:
+            raise serializers.ValidationError('Must be between 1 and 31.')
+        return value
+
+    def validate_overall_late_full_days(self, value):
+        if value is None:
+            return 6
+        value = int(value)
+        if not 2 <= value <= 31:
+            raise serializers.ValidationError('Must be between 2 and 31.')
+        return value
+
     def validate_check_in_buffer_minutes(self, value):
         if value is None:
             return 0
@@ -283,6 +349,18 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if bool(cin) != bool(cout):
             raise serializers.ValidationError(
                 'Set both expected check-in and check-out, or leave both blank to use company defaults.'
+            )
+        half_days = attrs.get(
+            'overall_late_half_days',
+            getattr(self.instance, 'overall_late_half_days', 5) if self.instance else 5,
+        )
+        full_days = attrs.get(
+            'overall_late_full_days',
+            getattr(self.instance, 'overall_late_full_days', 6) if self.instance else 6,
+        )
+        if int(full_days or 0) <= int(half_days or 0):
+            raise serializers.ValidationError(
+                {'overall_late_full_days': 'Full-day late count must be higher than the half-day count.'}
             )
         mtshop = attrs.get('mtshop_customer', serializers.empty)
         if mtshop is not serializers.empty and mtshop is not None:
