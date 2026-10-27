@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { apiError, formatINR, formatDate, monthLabel, periodContaining, statusLabel, toTimeInput } from './utils';
+import { apiError, formatINR, formatDate, formatTime12, monthLabel, periodContaining, statusLabel } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
@@ -108,8 +108,8 @@ export default function EmployeeDetails() {
           <Field label="Designation" value={data.designation || '—'} />
           <Field label="Department" value={data.department || '—'} />
           <Field label="Monthly Salary" value={formatINR(data.monthly_salary)} />
-          <Field label="Check-in" value={toTimeInput(data.effective_check_in) || '—'} />
-          <Field label="Check-out" value={toTimeInput(data.effective_check_out) || '—'} />
+          <Field label="Check-in" value={formatTime12(data.effective_check_in) || '—'} />
+          <Field label="Check-out" value={formatTime12(data.effective_check_out) || '—'} />
           <Field
             label="Check-in buffer"
             value={

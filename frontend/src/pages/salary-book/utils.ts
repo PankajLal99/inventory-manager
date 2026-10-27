@@ -17,6 +17,17 @@ export function formatTime(iso: string | null) {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
 
+/** 12-hour clock for time-of-day (HH:MM[:SS]) or ISO datetime, e.g. "6:00 pm". */
+export function formatTime12(value: string | null | undefined) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  const d = match ? new Date() : new Date(raw);
+  if (match) d.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+}
+
 export function formatDurationMinutes(mins: number | null | undefined) {
   if (mins == null || Number.isNaN(Number(mins)) || Number(mins) <= 0) return '';
   const total = Math.round(Number(mins));
