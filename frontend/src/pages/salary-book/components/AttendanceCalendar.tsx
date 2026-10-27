@@ -160,18 +160,18 @@ export function CalendarSummaryStrip({
 
 function EmployeeMoneyFooter({ emp }: { emp: CalendarEmployee }) {
   return (
-    <div className="mt-2 grid grid-cols-2 gap-2 sm:gap-3">
-      <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-3 sm:px-4 sm:py-4 min-w-0">
-        <div className="text-xs sm:text-sm font-medium text-emerald-800 leading-tight">Salary Generated</div>
-        <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none text-emerald-950 truncate">
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="inline-flex items-baseline gap-1.5 rounded-md bg-emerald-50 border border-emerald-100 px-2 py-1">
+        <span className="text-[11px] font-medium text-emerald-800">Salary Generated</span>
+        <span className="text-xs font-semibold tabular-nums text-emerald-950">
           {formatINR(emp.salary_generated || 0)}
-        </div>
+        </span>
       </div>
-      <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-3 sm:px-4 sm:py-4 min-w-0">
-        <div className="text-xs sm:text-sm font-medium text-sky-800 leading-tight">Taken</div>
-        <div className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none text-sky-950 truncate">
+      <div className="inline-flex items-baseline gap-1.5 rounded-md bg-sky-50 border border-sky-100 px-2 py-1">
+        <span className="text-[11px] font-medium text-sky-800">Taken</span>
+        <span className="text-xs font-semibold tabular-nums text-sky-950">
           {formatINR(emp.taken || 0)}
-        </div>
+        </span>
       </div>
     </div>
   );
