@@ -97,6 +97,116 @@ class CheckoutTests(APITestCase):
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('already checked out', response2.data.get('error', ''))
 
+    def test_reopened_cart_checkout_returns_existing_invoice(self):
+        """A cart flipped back to active after checkout should return the invoice already created."""
+        cart = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='pending',
+            customer=Customer.objects.create(name='Diamond Mobile'),
+        )
+        barcodes = list(Barcode.objects.filter(product=self.product, tag='new')[:2])
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=2,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[b.barcode for b in barcodes],
+        )
+        url = reverse('cart-checkout', args=[cart.id])
+        first = self.client.post(url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+
+        cart.status = 'active'
+        cart.save(update_fields=['status', 'updated_at'])
+
+        second = self.client.post(url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.data['id'], first.data['id'])
+        self.assertTrue(second.data['already_invoiced'])
+        self.assertEqual(Invoice.objects.filter(cart=cart).exclude(status='void').count(), 1)
+        cart.refresh_from_db()
+        self.assertEqual(cart.status, 'completed')
+
+    def test_active_cart_list_hides_cart_already_invoiced(self):
+        cart = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='pending',
+        )
+        barcode = Barcode.objects.filter(product=self.product, tag='new').first()
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[barcode.barcode],
+        )
+        checkout_url = reverse('cart-checkout', args=[cart.id])
+        created = self.client.post(checkout_url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        cart.status = 'active'
+        cart.save(update_fields=['status', 'updated_at'])
+
+        listed = self.client.get(reverse('cart-list-create'), {'active': 'true'})
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        self.assertNotIn(cart.id, [row['id'] for row in listed.data])
+        cart.refresh_from_db()
+        self.assertEqual(cart.status, 'completed')
+
+        detail = self.client.get(reverse('cart-detail', args=[cart.id]))
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail.data['status'], 'completed')
+
+    def test_cart_patch_does_not_reopen_completed_cart(self):
+        cart = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='completed',
+        )
+        url = reverse('cart-detail', args=[cart.id])
+        response = self.client.patch(url, {'invoice_type': 'pending', 'status': 'active'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cart.refresh_from_db()
+        self.assertEqual(cart.invoice_type, 'pending')
+        self.assertEqual(cart.status, 'completed')
+
+    def test_reopened_cart_with_extra_scan_is_not_treated_as_done(self):
+        cart = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='pending',
+        )
+        barcodes = list(Barcode.objects.filter(product=self.product, tag='new')[:2])
+        item = CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[barcodes[0].barcode],
+        )
+        url = reverse('cart-checkout', args=[cart.id])
+        first = self.client.post(url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+
+        cart.status = 'active'
+        cart.save(update_fields=['status', 'updated_at'])
+        item.scanned_barcodes = [barcodes[0].barcode, barcodes[1].barcode]
+        item.quantity = Decimal('2.000')
+        item.save(update_fields=['scanned_barcodes', 'quantity'])
+
+        second = self.client.post(url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Inventory Mismatch', second.data.get('error', ''))
+        self.assertEqual(Invoice.objects.filter(cart=cart).count(), 1)
+        cart.refresh_from_db()
+        self.assertEqual(cart.status, 'active')
+
     def test_insufficient_scans_fail_fast(self):
         """Test that checkout fails if not enough barcodes are scanned for a tracked product"""
         cart = Cart.objects.create(

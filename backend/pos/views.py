@@ -956,6 +956,95 @@ def pos_session_close(request, pk):
     return Response(POSSessionSerializer(session).data)
 
 
+def _invoice_covers_cart(cart, invoice):
+    """True when every current cart line is already on this invoice."""
+    invoiced_codes = set()
+    untracked_qty = {}
+    for item in invoice.items.all():
+        code = ''
+        barcode = getattr(item, 'barcode', None)
+        if barcode is not None:
+            code = (barcode.barcode or '').strip().upper()
+        if not code:
+            code = (item.sold_barcode_value or '').strip().upper()
+        if code:
+            invoiced_codes.add(code)
+            continue
+        key = (item.product_id, item.variant_id)
+        untracked_qty[key] = untracked_qty.get(key, Decimal('0')) + (item.quantity or Decimal('0'))
+
+    for cart_item in cart.items.all():
+        qty = cart_item.quantity or Decimal('0')
+        if qty <= 0:
+            continue
+        scanned = [
+            str(value).strip().upper()
+            for value in (cart_item.scanned_barcodes or [])
+            if str(value).strip()
+        ]
+        product = getattr(cart_item, 'product', None)
+        tracked = bool(product and product.track_inventory)
+        if tracked or scanned:
+            if Decimal(len(scanned)) < qty:
+                return False
+            if any(code not in invoiced_codes for code in scanned):
+                return False
+            continue
+        key = (cart_item.product_id, cart_item.variant_id)
+        have = untracked_qty.get(key, Decimal('0'))
+        if have < qty:
+            return False
+        untracked_qty[key] = have - qty
+    return True
+
+
+def invoice_covering_cart(cart):
+    """Non-void invoice linked to this cart that already contains its current lines."""
+    if cart.cart_number and str(cart.cart_number).lower().startswith('edit-'):
+        return None
+    prefetched = getattr(cart, '_prefetched_objects_cache', {}).get('invoices')
+    if prefetched is not None:
+        invoices = sorted(
+            (invoice for invoice in prefetched if invoice.status != 'void'),
+            key=lambda invoice: invoice.id,
+            reverse=True,
+        )
+    else:
+        invoices = cart.invoices.exclude(status='void').order_by('-id')
+    for invoice in invoices:
+        if _invoice_covers_cart(cart, invoice):
+            return invoice
+    return None
+
+
+def complete_cart_if_already_invoiced(cart):
+    """Mark the cart completed when its sale invoice already exists. Returns that invoice."""
+    invoice = invoice_covering_cart(cart)
+    if invoice is None:
+        return None
+    if cart.status != 'completed':
+        cart.status = 'completed'
+        cart.save(update_fields=['status', 'updated_at'])
+    return invoice
+
+
+def _drop_carts_already_invoiced(carts):
+    kept = []
+    for cart in carts:
+        if complete_cart_if_already_invoiced(cart):
+            continue
+        kept.append(cart)
+    return kept
+
+
+def _carts_with_invoice_coverage(queryset):
+    invoice_qs = Invoice.objects.exclude(status='void').prefetch_related('items__barcode')
+    return queryset.prefetch_related(
+        'items__product',
+        Prefetch('invoices', queryset=invoice_qs),
+    )
+
+
 # Cart views
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -974,6 +1063,7 @@ def active_carts_overview(request):
             carts = carts.filter(store_id=int(store_id))
         except ValueError:
             pass
+    carts = _drop_carts_already_invoiced(_carts_with_invoice_coverage(carts))
     # Barcode IDs that are already on paid/credit invoices — don't show them in overview (they're sold, cart is stale)
     from backend.pos.models import InvoiceItem
     from backend.catalog.models import Barcode
@@ -1118,10 +1208,11 @@ def cart_list_create(request):
                 status='active'
             ).exclude(cart_number__istartswith='edit-').order_by('-updated_at')
             active_carts = apply_emergency_visibility_window(active_carts, field='updated_at')
+            active_carts = _drop_carts_already_invoiced(_carts_with_invoice_coverage(active_carts))
             
             # If 'single' parameter is true, return only the most recent one (backward compatibility)
             if request.query_params.get('single') == 'true':
-                active_cart = active_carts.first()
+                active_cart = active_carts[0] if active_carts else None
                 if active_cart:
                     serializer = CartSerializer(active_cart)
                     return Response(serializer.data)
@@ -1263,6 +1354,8 @@ def cart_detail(request, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
     
     if request.method == 'GET':
+        if cart.status in ('active', 'held'):
+            complete_cart_if_already_invoiced(cart)
         serializer = CartSerializer(cart)
         return Response(serializer.data)
     elif request.method == 'PUT':
@@ -3030,6 +3123,32 @@ def cart_checkout(request, pk):
             {'error': 'Cart already checked out. This cart has already been completed.'},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+    # Checkout can succeed and a later cart save can flip status back to active.
+    # The invoice is already stored; return it and close the cart instead of
+    # failing because those barcodes are now sold.
+    existing_invoice = complete_cart_if_already_invoiced(cart)
+    if existing_invoice is not None:
+        create_audit_log(
+            request=request,
+            action='cart_checkout',
+            model_name='Invoice',
+            object_id=str(existing_invoice.id),
+            object_name=f"Invoice {existing_invoice.invoice_number}",
+            object_reference=existing_invoice.invoice_number,
+            changes={
+                'cart_id': cart.id,
+                'already_invoiced': True,
+                'invoice_type': existing_invoice.invoice_type,
+                'total': str(existing_invoice.total),
+            },
+        )
+        data = InvoiceSerializer(existing_invoice).data
+        data['already_invoiced'] = True
+        data['message'] = (
+            f'Invoice {existing_invoice.invoice_number} was already created for this cart.'
+        )
+        return Response(data, status=status.HTTP_200_OK)
 
     try:
         # 2. Determine shop type

@@ -245,6 +245,23 @@ class CartSerializer(serializers.ModelSerializer):
         model = Cart
         fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'items']
 
+    def update(self, instance, validated_data):
+        # Save only the fields in this request. A full save() would write a stale
+        # status loaded before checkout committed and put a finished cart back on POS.
+        status_value = validated_data.pop('status', None)
+        update_fields = []
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+            update_fields.append(attr)
+        if status_value is not None:
+            current_status = Cart.objects.filter(pk=instance.pk).values_list('status', flat=True).first()
+            if not (current_status == 'completed' and status_value != 'completed'):
+                instance.status = status_value
+                update_fields.append('status')
+        if update_fields:
+            instance.save(update_fields=update_fields)
+        return instance
+
 
 class CartOverviewSerializer(serializers.ModelSerializer):
     """Read-only serializer for active carts overview: user, locked, items."""
