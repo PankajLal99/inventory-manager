@@ -63,6 +63,13 @@ function formatDate(iso: string) {
   return formatAppDate(iso, { includeTime: true, empty: '' });
 }
 
+/** Show only the trailing segment after the last `-` (e.g. CART-20261112-A1B2C3D4 → A1B2C3D4). */
+function shortCartNumber(cartNumber: string | null | undefined): string {
+  const raw = (cartNumber || '').trim();
+  if (!raw) return '—';
+  return raw.split('-').pop() || raw;
+}
+
 export default function ActiveCartsOverview() {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -356,7 +363,7 @@ export default function ActiveCartsOverview() {
               </span>
             ) : (
               <span className="text-green-700">
-                Barcode &quot;{barcodeSearchApplied}&quot; found in: {matchingCarts.map((c) => c.cart_number).join(', ')}.
+                Barcode &quot;{barcodeSearchApplied}&quot; found in: {matchingCarts.map((c) => shortCartNumber(c.cart_number)).join(', ')}.
               </span>
             )}
           </p>
@@ -404,6 +411,7 @@ export default function ActiveCartsOverview() {
             headers={[
               '',
               'Cart',
+              'Customer',
               'User',
               'Locked',
               'Store',
@@ -443,14 +451,17 @@ export default function ActiveCartsOverview() {
                     )}
                   </TableCell>
                   <TableCell className="font-mono font-medium">
-                    <span className="flex items-center gap-2">
-                      {cart.cart_number}
+                    <span className="flex items-center gap-2" title={cart.cart_number}>
+                      {shortCartNumber(cart.cart_number)}
                       {isInvoiceEditCart(cart) && (
                         <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
                           Invoice edit
                         </span>
                       )}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    {cart.customer_name?.trim() || 'NA'}
                   </TableCell>
                   <TableCell>
                     <span className="flex items-center gap-1.5">
@@ -571,16 +582,14 @@ export default function ActiveCartsOverview() {
                 </TableRow>,
                 isExpanded ? (
                   <TableRow key={`${cart.id}-items`}>
-                    <TableCell colSpan={9} className="bg-gray-50/80 p-0">
+                    <TableCell colSpan={10} className="bg-gray-50/80 p-0">
                       <div className="border-t border-gray-200 px-6 py-4">
                         <div className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-700">
                           <Package className="h-4 w-4" />
                           Items in cart
-                          {cart.customer_name && (
-                            <span className="text-gray-500">
-                              · Customer: {cart.customer_name}
-                            </span>
-                          )}
+                          <span className="text-gray-500">
+                            · Customer: {cart.customer_name?.trim() || 'NA'}
+                          </span>
                         </div>
                         {itemCount === 0 ? (
                           <p className="text-sm text-gray-500">No items</p>

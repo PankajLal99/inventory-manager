@@ -45,6 +45,7 @@ from .cart_scan_times import (
     ensure_line_scanned_at,
     lookup_barcode_scan_time,
 )
+from .cart_discard import clear_stale_edit_carts, discard_cart_safely
 
 
 def _get_barcode_supplier_id(barcode_obj):
@@ -1053,6 +1054,9 @@ def active_carts_overview(request):
     Barcodes that are already on a paid/credit invoice are excluded from display (stale cart data)."""
     from backend.core.emergency_mask import apply_emergency_visibility_window
 
+    # Opportunistic auto-clear of stale invoice-edit carts (no cron required).
+    clear_stale_edit_carts(request=request)
+
     carts = Cart.objects.filter(
         status__in=['active', 'held']
     ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
@@ -1094,6 +1098,54 @@ def _can_resume_pos_cart_to_self(user):
     if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
         return True
     return user.groups.filter(name__in=['Super', 'Admin']).exists()
+
+
+def _user_in_admin_group(user):
+    """True when user is in the Admin group (or superuser). Used for sensitive invoice edits."""
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    return user.groups.filter(name='Admin').exists()
+
+
+def _parse_invoice_created_at(raw_value):
+    """Parse created_at from request body; return aware datetime or raise ValueError."""
+    if raw_value in (None, ''):
+        raise ValueError('created_at is required')
+    raw_str = str(raw_value).strip()
+    if raw_str.endswith('Z'):
+        raw_str = raw_str[:-1] + '+00:00'
+    parsed = parse_datetime(raw_str)
+    if parsed is None:
+        # Accept space-separated "YYYY-MM-DD HH:MM[:SS]" from some clients
+        try:
+            parsed = datetime.fromisoformat(raw_str)
+        except ValueError as exc:
+            raise ValueError('Invalid created_at datetime format') from exc
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def _sync_invoice_ledger_created_at(invoice, created_at):
+    """
+    When invoice datetime changes, move linked customer-ledger sale debits
+    (and mirrored internal/MT SHOP entries) to the same timestamp.
+    Payment / settlement credit rows keep their own created_at.
+    """
+    from backend.parties.models import InternalLedgerEntry
+
+    debit_entries = list(
+        LedgerEntry.objects.filter(invoice=invoice, entry_type='debit').only('id', 'created_at')
+    )
+    if not debit_entries:
+        return
+    debit_ids = [entry.id for entry in debit_entries]
+    LedgerEntry.objects.filter(id__in=debit_ids).update(created_at=created_at)
+    InternalLedgerEntry.objects.filter(source_ledger_entry_id__in=debit_ids).update(
+        created_at=created_at
+    )
 
 
 @api_view(['POST'])
@@ -1288,69 +1340,8 @@ def cart_detail(request, pk):
                 {'error': 'Cart is locked.', 'detail': 'Unlock the cart before closing or discarding it.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Barcodes already on paid/partial/credit invoices must stay 'sold' — do not revert them when discarding
-        sold_barcode_ids = set(
-            InvoiceItem.objects.filter(
-                invoice__status__in=['paid', 'partial', 'credit']
-            ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
-        )
-        # Release all SKUs/barcodes from scanned_barcodes back to available inventory (except those already sold)
-        # Also restore stock for non-tracked inventory items
-        for cart_item in cart.items.all():
-            # Restore stock for non-tracked inventory items
-            if not cart_item.product.track_inventory and cart.store:
-                stock, created = Stock.objects.get_or_create(
-                    product=cart_item.product,
-                    variant=cart_item.variant,
-                    store=cart.store,
-                    defaults={'quantity': Decimal('0.000')}
-                )
-                stock.quantity += cart_item.quantity
-                stock.save()
-            
-            # Handle barcodes for tracked inventory items - restore from 'in-cart' or 'sold' to 'new'
-            if cart_item.scanned_barcodes:
-                for barcode_value in cart_item.scanned_barcodes:
-                    if not barcode_value:
-                        continue
-                    b_upper = str(barcode_value).strip().upper()
-                    try:
-                        try:
-                            barcode_obj = Barcode.objects.get(barcode=b_upper)
-                        except Barcode.DoesNotExist:
-                            barcode_obj = Barcode.objects.get(short_code=b_upper)
-                        # Do not revert barcodes that are on a paid/partial/credit invoice — they stay 'sold'
-                        if barcode_obj.id in sold_barcode_ids:
-                            continue
-                        # Restore from 'in-cart' or 'sold' back to 'new' when cart is deleted
-                        old_tag = barcode_obj.tag
-                        if barcode_obj.tag in ['in-cart', 'sold']:
-                            barcode_obj.tag = 'new'
-                            barcode_obj.save(update_fields=['tag'])
-                            invalidate_barcode_cache(barcode_obj)  # so next byBarcode() returns fresh data
-                            # Audit log: Barcode tag changed (in-cart/sold -> new)
-                            create_audit_log(
-                                request=request,
-                                action='barcode_tag_change',
-                                model_name='Barcode',
-                                object_id=str(barcode_obj.id),
-                                object_name=cart_item.product.name,
-                                object_reference=f"Cart #{cart.cart_number or cart.id}",
-                                barcode=barcode_obj.barcode,
-                                changes={
-                                    'tag': {'old': old_tag, 'new': 'new'},
-                                    'barcode': barcode_obj.barcode,
-                                    'product_id': cart_item.product.id,
-                                    'product_name': cart_item.product.name,
-                                    'cart_id': cart.id,
-                                    'cart_number': cart.cart_number,
-                                    'context': 'cart_deleted',
-                                }
-                            )
-                    except Barcode.DoesNotExist:
-                        pass  # Barcode doesn't exist, skip
-        
-        cart.delete()
+        # Preserve barcodes on any non-void invoice; only release free in-cart reservations.
+        discard_cart_safely(cart, request=request)
         return Response(status=status.HTTP_204_NO_CONTENT)
     
     if request.method == 'GET':
@@ -3668,11 +3659,28 @@ def invoice_detail(request, pk):
             return Response(InvoiceSerializer(invoice).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
-        # Check what fields are being updated
-        update_fields = set(request.data.keys())
+        # Work on a mutable copy so we can normalize keys without mutating the request body in place
+        patch_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if 'createdAt' in patch_data and 'created_at' not in patch_data:
+            patch_data['created_at'] = patch_data.pop('createdAt')
+
+        update_fields = set(patch_data.keys())
         allowed_fields_for_all = {'invoice_type', 'store', 'customer', 'tag_ids'}  # Fields that can be edited for any invoice
-        
-        # If updating only invoice_type, store, and/or customer, allow it for any invoice
+        created_at_override = None
+        if 'created_at' in update_fields:
+            if not _user_in_admin_group(request.user):
+                return Response(
+                    {'error': 'Only Admin users can change invoice date/time'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            try:
+                created_at_override = _parse_invoice_created_at(patch_data.get('created_at'))
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            patch_data['created_at'] = created_at_override
+            allowed_fields_for_all = allowed_fields_for_all | {'created_at'}
+
+        # If updating only invoice_type, store, customer, and/or created_at (admin), allow it for any invoice
         # Otherwise, only allow editing draft pending invoices
         if not update_fields.issubset(allowed_fields_for_all):
             # Updating other fields - only allow for draft pending invoices
@@ -3687,8 +3695,9 @@ def invoice_detail(request, pk):
         old_store = invoice.store_id if invoice.store else None
         old_customer_id = invoice.customer_id
         old_customer_name = invoice.customer.name if invoice.customer else None
-        
-        serializer = InvoiceSerializer(invoice, data=request.data, partial=True)
+        old_created_at = invoice.created_at
+
+        serializer = InvoiceSerializer(invoice, data=patch_data, partial=True)
         if serializer.is_valid():
             old_total = invoice.total
             old_invoice_type_for_recalc = invoice.invoice_type
@@ -3696,6 +3705,12 @@ def invoice_detail(request, pk):
             old_paid_amount = invoice.paid_amount
             old_due_amount = invoice.due_amount
             serializer.save()
+            if created_at_override is not None and old_created_at != created_at_override:
+                # Ensure DB value matches (serializer may have written it) and sync ledger debits
+                if invoice.created_at != created_at_override:
+                    invoice.created_at = created_at_override
+                    invoice.save(update_fields=['created_at'])
+                _sync_invoice_ledger_created_at(invoice, created_at_override)
             
             # Always recalculate totals if invoice_type changed (totals depend on invoice_type)
             # Also recalculate if other fields changed (not just invoice_type/store)
@@ -3889,13 +3904,18 @@ def invoice_detail(request, pk):
                         'old': str(old_store) if old_store else None,
                         'new': str(new_store_id) if new_store_id else None
                     }
-            if 'customer' in request.data and old_customer_id != (invoice.customer_id or None):
+            if 'customer' in patch_data and old_customer_id != (invoice.customer_id or None):
                 new_customer_name = invoice.customer.name if invoice.customer else None
                 changes['customer'] = {
                     'old': str(old_customer_id) if old_customer_id else None,
                     'old_name': old_customer_name,
                     'new': str(invoice.customer_id) if invoice.customer_id else None,
                     'new_name': new_customer_name,
+                }
+            if created_at_override is not None and old_created_at != created_at_override:
+                changes['created_at'] = {
+                    'old': old_created_at.isoformat() if old_created_at else None,
+                    'new': created_at_override.isoformat(),
                 }
             # Track status change if invoice_type changed to pending
             if invoice_type_changed and invoice.invoice_type == 'pending' and old_status != invoice.status:
@@ -4789,6 +4809,8 @@ def invoice_edit(request, pk):
             {'error': 'Void invoices cannot be edited'},
             status=status.HTTP_400_BAD_REQUEST
         )
+    # Drop this user's abandoned EDIT carts before opening a new edit session.
+    clear_stale_edit_carts(created_by=request.user, request=request)
     cart_number = f'EDIT-{uuid.uuid4().hex[:8]}'
     while Cart.objects.filter(cart_number=cart_number).exists():
         cart_number = f'EDIT-{uuid.uuid4().hex[:8]}'

@@ -391,6 +391,23 @@ function DayStatusCell({
       );
     }
 
+    // Past unmarked days count as absent for display (same as salary invoice).
+    if (isPast) {
+      const style = STATUS_STYLE.ABSENT;
+      return wrap(
+        <div
+          className={`flex h-full w-full flex-col items-center justify-center ${minH} ${round} ${style.bg} ${style.text} ${
+            todayRing ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
+          } ${interactive ? 'ring-1 ring-dashed ring-white/50' : ''}`}
+        >
+          <span className={`font-bold leading-none ${compact ? 'text-sm' : 'text-base'}`}>{style.short}</span>
+          {interactive && (
+            <span className="mt-1 text-[9px] font-medium leading-none opacity-90">Edit</span>
+          )}
+        </div>
+      );
+    }
+
     return wrap(
       <div
         className={`flex h-full w-full flex-col items-center justify-center bg-white text-slate-400 ${minH} ${round} ${
@@ -398,7 +415,7 @@ function DayStatusCell({
         } ${interactive ? 'ring-1 ring-dashed ring-slate-300 hover:bg-emerald-50 hover:text-emerald-700' : 'ring-1 ring-dashed ring-slate-200'}`}
       >
         <span className={`leading-none ${compact ? 'text-[10px] font-medium' : 'text-xs font-medium'}`}>
-          {interactive ? (isPast ? 'Mark' : 'Add') : '—'}
+          {interactive ? 'Add' : '—'}
         </span>
       </div>
     );
@@ -477,11 +494,16 @@ function MobileDayChip({
     if (status === 'BEFORE_JOINING') {
       bg = 'bg-slate-50 text-slate-300';
       sub = '';
+    } else if (isPast) {
+      // Past unmarked days count as absent for display (same as salary invoice).
+      const style = STATUS_STYLE.ABSENT;
+      bg = `${style.bg} ${style.text}`;
+      sub = style.short;
     } else {
       bg = isToday
         ? 'bg-white text-emerald-700 ring-1 ring-dashed ring-emerald-400'
         : 'bg-white text-slate-400 ring-1 ring-dashed ring-slate-300';
-      sub = isPast ? '·' : '+';
+      sub = '+';
     }
   } else {
     const style = STATUS_STYLE[status];
@@ -1009,10 +1031,18 @@ function AdminStripDay({
         <span className="text-xs leading-none">—</span>
       </div>
     );
+  } else if (isPast) {
+    // Past unmarked days count as absent for display (same as salary invoice).
+    const style = STATUS_STYLE.ABSENT;
+    body = (
+      <div className={`flex flex-1 flex-col items-center justify-center px-0.5 py-1.5 ${style.bg} ${style.text}`}>
+        <span className="text-xs font-bold leading-none">{style.short}</span>
+      </div>
+    );
   } else {
     body = (
       <div className="flex flex-1 items-center justify-center bg-white px-0.5 py-1.5 text-slate-400 ring-inset">
-        <span className="text-[10px] font-medium leading-none">{isPast ? '·' : '+'}</span>
+        <span className="text-[10px] font-medium leading-none">+</span>
       </div>
     );
   }

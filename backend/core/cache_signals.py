@@ -62,6 +62,13 @@ def invalidate_cache_pattern(pattern):
             if cursor == 0:
                 break
         
+        # Never delete debounce lock keys (e.g. cache_invalidation_lock:products_list)
+        # — a broad *products_list* SCAN would otherwise wipe the lock and defeat debounce.
+        def _is_lock_key(key) -> bool:
+            raw = key.decode('utf-8', errors='ignore') if isinstance(key, (bytes, bytearray)) else str(key)
+            return 'cache_invalidation_lock:' in raw
+
+        keys = [k for k in keys if not _is_lock_key(k)]
         if keys:
             redis_conn.delete(*keys)
             logger.info(f"Cache invalidation requested for pattern: {pattern} - Deleted {len(keys)} keys")

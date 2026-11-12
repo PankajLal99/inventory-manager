@@ -2,6 +2,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.utils import timezone
+from datetime import datetime
 from decimal import Decimal
 import uuid
 from backend.catalog.models import Product, Barcode, Category
@@ -2700,3 +2701,342 @@ class InvoiceTypePatchToCreditTests(APITestCase):
         debit = LedgerEntry.objects.filter(invoice=self.invoice, entry_type='debit').first()
         self.assertIsNotNone(debit)
         self.assertEqual(debit.amount, Decimal('250.00'))
+
+
+class InvoiceCreatedAtAdminPatchTests(APITestCase):
+    """PATCH created_at is Admin-only and syncs linked ledger debit timestamps."""
+
+    def setUp(self):
+        self.admin_group, _ = Group.objects.get_or_create(name='Admin')
+        self.admin = User.objects.create_user(
+            username=f'admin_created_{uuid.uuid4().hex[:6]}', password='password'
+        )
+        self.admin.groups.add(self.admin_group)
+        self.plain = User.objects.create_user(
+            username=f'plain_created_{uuid.uuid4().hex[:6]}', password='password'
+        )
+        self.store = Store.objects.create(name='Created At Store', shop_type='retail')
+        self.customer = Customer.objects.create(name='Created At Cust', phone='7777777777')
+        self.invoice = Invoice.objects.create(
+            invoice_number=f'INV-CREATED-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=self.customer,
+            status='credit',
+            invoice_type='credit',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('0.00'),
+            due_amount=Decimal('100.00'),
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime(2026, 1, 10, 10, 0, 0)),
+        )
+        self.debit = LedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=self.invoice,
+            entry_type='debit',
+            amount=Decimal('100.00'),
+            description=f'Credit Invoice {self.invoice.invoice_number}',
+            created_by=self.admin,
+            created_at=self.invoice.created_at,
+        )
+
+    def test_non_admin_cannot_patch_created_at(self):
+        self.client.force_authenticate(user=self.plain)
+        url = reverse('invoice-detail', kwargs={'pk': self.invoice.id})
+        response = self.client.patch(
+            url,
+            {'created_at': '2026-03-15T14:30:00'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_can_patch_created_at_and_sync_ledger_debit(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('invoice-detail', kwargs={'pk': self.invoice.id})
+        response = self.client.patch(
+            url,
+            {'created_at': '2026-03-15T14:30:00'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.invoice.refresh_from_db()
+        self.debit.refresh_from_db()
+        self.assertEqual(self.invoice.created_at.year, 2026)
+        self.assertEqual(self.invoice.created_at.month, 3)
+        self.assertEqual(self.invoice.created_at.day, 15)
+        self.assertEqual(self.debit.created_at, self.invoice.created_at)
+
+
+class CartDiscardSafelyTests(APITestCase):
+    """Barcode-safe discard for EDIT carts and free in-cart reservations."""
+
+    def setUp(self):
+        from backend.pos.cart_discard import discard_cart_safely, edit_cart_is_fully_invoice_covered
+
+        self.discard_cart_safely = discard_cart_safely
+        self.edit_cart_is_fully_invoice_covered = edit_cart_is_fully_invoice_covered
+        self.user = User.objects.create_user(
+            username=f'discard_{uuid.uuid4().hex[:6]}', password='password'
+        )
+        self.store = Store.objects.create(name='Discard Store', shop_type='retail')
+        self.category = Category.objects.create(name=f'Cat-{uuid.uuid4().hex[:6]}')
+        self.product = Product.objects.create(
+            name='Discard Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+
+    def test_preserves_sold_barcode_on_paid_invoice(self):
+        sold_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'SOLD-{uuid.uuid4().hex[:8]}',
+            tag='sold',
+        )
+        free_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'FREE-{uuid.uuid4().hex[:8]}',
+            tag='in-cart',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='paid',
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=sold_bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        cart = Cart.objects.create(
+            cart_number=f'EDIT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=2,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[sold_bc.barcode, free_bc.barcode],
+        )
+
+        summary = self.discard_cart_safely(cart)
+        sold_bc.refresh_from_db()
+        free_bc.refresh_from_db()
+
+        self.assertFalse(Cart.objects.filter(pk=cart.pk).exists())
+        self.assertEqual(sold_bc.tag, 'sold')
+        self.assertEqual(free_bc.tag, 'new')
+        self.assertEqual(summary['preserved'], 1)
+        self.assertEqual(summary['released'], 1)
+
+    def test_preserves_sold_barcode_on_draft_pending_invoice(self):
+        """Pending draft barcodes must not flip sold -> new on EDIT discard."""
+        sold_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'PEND-{uuid.uuid4().hex[:8]}',
+            tag='sold',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='pending',
+            status='draft',
+            total=Decimal('50.00'),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=sold_bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('50.00'),
+            line_total=Decimal('50.00'),
+        )
+        cart = Cart.objects.create(
+            cart_number=f'EDIT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('50.00'),
+            scanned_barcodes=[sold_bc.barcode],
+        )
+
+        self.assertTrue(self.edit_cart_is_fully_invoice_covered(cart))
+        self.discard_cart_safely(cart)
+        sold_bc.refresh_from_db()
+        self.assertEqual(sold_bc.tag, 'sold')
+        self.assertFalse(Cart.objects.filter(pk=cart.pk).exists())
+
+    def test_api_delete_uses_safe_discard(self):
+        sold_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'API-{uuid.uuid4().hex[:8]}',
+            tag='sold',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='paid',
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=sold_bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        cart = Cart.objects.create(
+            cart_number=f'EDIT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[sold_bc.barcode],
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse('cart-detail', args=[cart.id])
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        sold_bc.refresh_from_db()
+        self.assertEqual(sold_bc.tag, 'sold')
+        self.assertFalse(Cart.objects.filter(pk=cart.pk).exists())
+
+    def test_get_edit_cart_stale_hours_uses_admin_setting(self):
+        from backend.core.models import Setting
+        from backend.pos.cart_discard import (
+            EDIT_CART_STALE_HOURS_KEY,
+            get_edit_cart_stale_hours,
+        )
+
+        Setting.objects.update_or_create(
+            key=EDIT_CART_STALE_HOURS_KEY,
+            defaults={'value': '3', 'description': 'test'},
+        )
+        self.assertEqual(get_edit_cart_stale_hours(), 3)
+        Setting.objects.filter(key=EDIT_CART_STALE_HOURS_KEY).update(value='bogus')
+        self.assertEqual(get_edit_cart_stale_hours(), 1)
+
+    def test_overview_opportunistically_clears_fully_covered_edit_cart(self):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        sold_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'OVW-{uuid.uuid4().hex[:8]}',
+            tag='sold',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='paid',
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=sold_bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        cart = Cart.objects.create(
+            cart_number=f'EDIT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[sold_bc.barcode],
+        )
+        # Age it past the EDIT TTL as well (fully covered would clear anyway).
+        Cart.objects.filter(pk=cart.pk).update(updated_at=timezone.now() - timedelta(hours=5))
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(reverse('active-carts-overview'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Cart.objects.filter(pk=cart.pk).exists())
+        sold_bc.refresh_from_db()
+        self.assertEqual(sold_bc.tag, 'sold')
+        cart_numbers = [c.get('cart_number') for c in response.data.get('carts', [])]
+        self.assertNotIn(cart.cart_number, cart_numbers)
+
+    def test_invoice_edit_clears_users_stale_edit_carts_first(self):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        sold_bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'IED-{uuid.uuid4().hex[:8]}',
+            tag='sold',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='paid',
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=sold_bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        stale = Cart.objects.create(
+            cart_number=f'EDIT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=stale,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[sold_bc.barcode],
+        )
+        Cart.objects.filter(pk=stale.pk).update(updated_at=timezone.now() - timedelta(hours=5))
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(reverse('invoice-edit', args=[invoice.id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertFalse(Cart.objects.filter(pk=stale.pk).exists())
+        self.assertTrue(Cart.objects.filter(pk=response.data['cart_id']).exists())
+        sold_bc.refresh_from_db()
+        self.assertEqual(sold_bc.tag, 'sold')

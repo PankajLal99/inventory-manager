@@ -274,9 +274,27 @@ function buildTradeInDetailThermalHtml(invoice: { pos_trade_ins?: unknown }): st
     .join('');
 }
 
+/** Local datetime-local input value from an API ISO timestamp. */
+function toDatetimeLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Convert datetime-local value to ISO for PATCH created_at. */
+function datetimeLocalToISO(local: string): string {
+  if (!local) return '';
+  const d = new Date(local);
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString();
+}
+
 export default function InvoiceDetail() {
   const user = auth.getUser();
   const userGroups = user?.groups || [];
+  const isAdmin = Boolean(user?.is_superuser || userGroups.includes('Admin'));
   const isRestrictedUser = (userGroups.includes('Retail') || userGroups.includes('Wholesale')) &&
     !userGroups.includes('Admin') &&
     !userGroups.includes('RetailAdmin') &&
@@ -335,6 +353,8 @@ export default function InvoiceDetail() {
   const [editingInvoiceType, setEditingInvoiceType] = useState(false);
   const [editingStore, setEditingStore] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(false);
+  const [editingCreatedAt, setEditingCreatedAt] = useState(false);
+  const [createdAtInput, setCreatedAtInput] = useState('');
   const [selectedInvoiceType, setSelectedInvoiceType] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
@@ -1038,16 +1058,23 @@ export default function InvoiceDetail() {
   });
 
   const updateInvoiceMutation = useMutation({
-    mutationFn: (data: { invoice_type?: string; store?: number; customer?: number | null }) =>
-      posApi.invoices.update(invoiceId, data),
+    mutationFn: (data: {
+      invoice_type?: string;
+      store?: number;
+      customer?: number | null;
+      created_at?: string;
+    }) => posApi.invoices.update(invoiceId, data),
     onSuccess: async () => {
       // Invalidate and refetch to get updated totals
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger'] });
+      queryClient.invalidateQueries({ queryKey: ['customer-ledger'] });
       setEditingInvoiceType(false);
       setEditingStore(false);
       setEditingCustomer(false);
+      setEditingCreatedAt(false);
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to update invoice');
@@ -2716,6 +2743,69 @@ export default function InvoiceDetail() {
         <Card>
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Invoice Information</h3>
           <dl className="space-y-4">
+            <div className="flex items-start gap-3">
+              <Calendar className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <dt className="text-sm font-medium text-gray-500 mb-1 flex items-center gap-2">
+                  Invoice Date / Time
+                  {isAdmin && inv.status !== 'void' && (
+                    <button
+                      onClick={() => {
+                        setCreatedAtInput(toDatetimeLocalInput(inv.created_at));
+                        setEditingCreatedAt(true);
+                      }}
+                      className="p-1 rounded hover:bg-gray-100 transition-colors"
+                      title="Edit invoice date/time (Admin only)"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
+                    </button>
+                  )}
+                </dt>
+                {editingCreatedAt ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <Input
+                      type="datetime-local"
+                      value={createdAtInput}
+                      onChange={(e) => setCreatedAtInput(e.target.value)}
+                      className="flex-1 text-sm"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const iso = datetimeLocalToISO(createdAtInput);
+                          if (!iso) {
+                            alert('Please select a valid date and time');
+                            return;
+                          }
+                          if (iso === new Date(inv.created_at).toISOString()) {
+                            setEditingCreatedAt(false);
+                            return;
+                          }
+                          updateInvoiceMutation.mutate({ created_at: iso });
+                        }}
+                        disabled={updateInvoiceMutation.isPending || !createdAtInput}
+                      >
+                        {updateInvoiceMutation.isPending ? 'Saving...' : 'Save'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setEditingCreatedAt(false);
+                          setCreatedAtInput(toDatetimeLocalInput(inv.created_at));
+                        }}
+                        disabled={updateInvoiceMutation.isPending}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <dd className="text-sm text-gray-900">{formatDate(inv.created_at) || '-'}</dd>
+                )}
+              </div>
+            </div>
             <div className="flex items-start gap-3">
               <Store className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
