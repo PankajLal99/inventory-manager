@@ -170,7 +170,8 @@ def _with_invoice_list_prefetches(queryset):
 
 def _build_invoice_list_context(invoice_ids):
     """
-    Pre-compute replacement summaries and pending totals in bulk for the invoice list.
+    Pre-compute replacement summaries, pending totals, and sold quantities in bulk
+    for the invoice list.
     Returns a context dict to pass to InvoiceListSerializer, replacing per-invoice DB queries.
 
     Replaces two N+1 patterns in the original InvoiceSerializer:
@@ -178,7 +179,7 @@ def _build_invoice_list_context(invoice_ids):
     - get_display_total (pending): was 1 aggregate query per pending invoice
     """
     if not invoice_ids:
-        return {'replacement_summaries_map': {}, 'pending_totals_map': {}}
+        return {'replacement_summaries_map': {}, 'pending_totals_map': {}, 'sold_quantity_map': {}}
 
     money_field = DecimalField(max_digits=18, decimal_places=2)
 
@@ -234,9 +235,21 @@ def _build_invoice_list_context(invoice_ids):
     )
     pending_totals_map = {row['invoice_id']: row['total'] for row in pending_rows}
 
+    quantity_rows = (
+        InvoiceItem.objects
+        .filter(invoice_id__in=invoice_ids)
+        .values('invoice_id')
+        .annotate(total_quantity=Sum('quantity'))
+    )
+    sold_quantity_map = {
+        row['invoice_id']: row['total_quantity'] or Decimal('0.000')
+        for row in quantity_rows
+    }
+
     return {
         'replacement_summaries_map': replacement_summaries_map,
         'pending_totals_map': pending_totals_map,
+        'sold_quantity_map': sold_quantity_map,
         'amount_profile': 'invoice_list',
     }
 

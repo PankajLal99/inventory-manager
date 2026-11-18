@@ -50,6 +50,7 @@ interface Invoice {
   display_total?: string | number;
   computed_total?: string | number;
   computed_paid?: string | number;
+  sold_quantity?: string | number;
   replacement_summary?: {
     total_credit?: string | number;
     historical_total?: string | number;
@@ -159,6 +160,35 @@ const invoiceStatusLabel: Record<string, string> = {
 };
 const getInvoiceTypeLabel = (type: string) =>
   invoiceTypeLabel[String(type || '').toLowerCase()] || type || 'Cash';
+
+const QUANTITY_TYPE_ORDER = ['cash', 'upi', 'mixed', 'credit', 'pending'];
+
+const formatQuantity = (value: number) => formatNumber(value, 3);
+
+/** Product quantities for the same invoices that feed a KPI, split by invoice type. */
+const quantityBracketLabel = (invoices: Invoice[]) => {
+  const totals = new Map<string, number>();
+  let total = 0;
+  for (const invoice of invoices) {
+    const qty = parseAmount(invoice.sold_quantity);
+    total += qty;
+    if (qty === 0) continue;
+    const type = String(invoice.invoice_type || '').toLowerCase() || 'other';
+    totals.set(type, (totals.get(type) || 0) + qty);
+  }
+  const orderedTypes = [
+    ...QUANTITY_TYPE_ORDER.filter((type) => totals.has(type)),
+    ...[...totals.keys()].filter((type) => !QUANTITY_TYPE_ORDER.includes(type)),
+  ];
+  if (orderedTypes.length <= 1) {
+    return `(${formatQuantity(total)})`;
+  }
+  const parts = orderedTypes
+    .map((type) => `${getInvoiceTypeLabel(type)} ${formatQuantity(totals.get(type) || 0)}`)
+    .join(', ');
+  return `(${formatQuantity(total)} · ${parts})`;
+};
+
 const getInvoiceStatusLabel = (status: string) =>
   invoiceStatusLabel[String(status || '').toLowerCase()] || status || '—';
 
@@ -379,13 +409,16 @@ export default function Invoices() {
     formatAppDate(dateString, { includeTime: true, empty: '' });
 
 
-  // KPI summary based on currently loaded/visible invoice results
-  const totalRevenue = filteredInvoices
-    .filter(inv => inv.status === 'paid')
+  // KPI summary based on currently loaded/visible invoice results.
+  // Quantities follow the same invoices that contribute to each amount.
+  const revenueInvoices = filteredInvoices.filter(inv => inv.status === 'paid');
+  const totalRevenue = revenueInvoices
     .reduce((sum, inv) => sum + invoiceDisplayPaid(inv), 0);
-  const totalPendingInvoiceAmount = filteredInvoices
-    .filter(inv => inv.invoice_type === 'pending')
+  const revenueQuantityLabel = quantityBracketLabel(revenueInvoices);
+  const pendingInvoices = filteredInvoices.filter(inv => inv.invoice_type === 'pending');
+  const totalPendingInvoiceAmount = pendingInvoices
     .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
+  const pendingQuantityLabel = quantityBracketLabel(pendingInvoices);
   const totalInvoices = filteredInvoices.length;
   const paidInvoices = filteredInvoices.filter(inv => inv.status === 'paid').length;
 
@@ -540,27 +573,33 @@ export default function Invoices() {
           <p className="text-sm font-medium text-gray-500">Live summary</p>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <Card>
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
                   <p className="text-sm font-medium text-gray-600">Total Revenue</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  ₹{formatNumber(totalRevenue)}
-                </p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
+                  <p className="text-2xl font-bold text-gray-900 mt-1 leading-tight">
+                    ₹{formatNumber(totalRevenue)}{' '}
+                    <span className="text-base font-semibold text-gray-500" title="Product quantity on paid invoices, split by invoice type">
+                      {revenueQuantityLabel}
+                    </span>
+                  </p>
+                </div>
+              <div className="p-3 bg-green-100 rounded-lg shrink-0">
                 <Coins className="h-6 w-6 text-green-600" />
               </div>
             </div>
           </Card>
             <Card>
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
                   <p className="text-sm font-medium text-gray-600">Pending Invoice Amount</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">
-                    ₹{formatNumber(totalPendingInvoiceAmount)}
+                  <p className="text-2xl font-bold text-gray-900 mt-1 leading-tight">
+                    ₹{formatNumber(totalPendingInvoiceAmount)}{' '}
+                    <span className="text-base font-semibold text-gray-500" title="Product quantity on pending invoices">
+                      {pendingQuantityLabel}
+                    </span>
                   </p>
                 </div>
-                <div className="p-3 bg-amber-100 rounded-lg">
+                <div className="p-3 bg-amber-100 rounded-lg shrink-0">
                   <Clock className="h-6 w-6 text-amber-600" />
                 </div>
               </div>

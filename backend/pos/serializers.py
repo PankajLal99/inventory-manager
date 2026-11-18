@@ -701,6 +701,7 @@ class InvoiceListSerializer(serializers.ModelSerializer):
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
+    sold_quantity = serializers.SerializerMethodField()
     replacement_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -708,10 +709,20 @@ class InvoiceListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
             'status', 'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total',
-            'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
+            'display_total', 'computed_total', 'computed_paid', 'sold_quantity', 'paid_amount', 'due_amount',
             'is_replacement_return', 'replacement_summary', 'tags',
             'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on',
         ]
+
+    def get_sold_quantity(self, obj):
+        """Sum of line quantities for this invoice. List view supplies this in bulk."""
+        sold_quantity_map = self.context.get('sold_quantity_map')
+        if sold_quantity_map is not None:
+            return float(sold_quantity_map.get(obj.id) or Decimal('0.000'))
+        total = InvoiceItem.objects.filter(invoice=obj).aggregate(
+            total=Sum('quantity')
+        )['total'] or Decimal('0.000')
+        return float(total)
 
     def get_display_total(self, obj):
         if obj.invoice_type != 'pending':
